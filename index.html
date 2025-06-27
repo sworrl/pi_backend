@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>π-Backend Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        :root {
+            --bg-color: #030712; --sidebar-bg: #111827; --card-bg: #1f2937;
+            --border-color: #374151; --text-primary: #f9fafb; --text-secondary: #9ca3af;
+            --accent-color: #22d3ee; --accent-color-hover: #06b6d4;
+            --error-color: #ef4444; --error-color-light: #fca5a5; --success-color: #22c55e;
+            --info-color: #3b82f6; --warning-color: #f59e0b;
+        }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg-color); color: var(--text-primary); }
+        .sidebar { background-color: var(--sidebar-bg); border-right: 1px solid var(--border-color); }
+        .card { background-color: var(--card-bg); border-radius: 0.75rem; border: 1px solid var(--border-color); }
+        .tab-button.active { color: var(--accent-color); border-bottom-color: var(--accent-color); font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .api-btn {
+            background-color: var(--accent-color); color: black; font-weight: 600;
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 0.5rem;
+            transition: all 0.2s ease-in-out; white-space: nowrap;
+        }
+        .api-btn:hover { background-color: var(--accent-color-hover); }
+        .api-btn.secondary { background-color: #374151; color: var(--text-primary); }
+        .api-btn.secondary:hover { background-color: #4b5563; }
+        .response-box {
+            background-color: #0c121d; border: 1px solid var(--border-color); border-radius: 0.5rem;
+            padding: 1rem; margin-top: 1rem; max-height: 400px; overflow-y: auto;
+            font-family: 'Fira Code', 'Courier New', monospace; font-size: 0.75rem;
+            white-space: pre-wrap; word-break: break-all;
+        }
+        input, select, textarea {
+             background-color: #1f2937; border: 1px solid var(--border-color); color: var(--text-primary);
+             border-radius: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.875rem;
+        }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-color); box-shadow: 0 0 0 1px var(--accent-color); }
+        .grid-item-label { color: var(--text-secondary); font-size: 0.875rem; }
+        .grid-item-value { color: var(--text-primary); font-size: 1rem; font-weight: 500; }
+        .weather-card-icon { width: 48px; height: 48px; margin: 0 auto; } /* Adjust size as needed */
+
+        /* Message Display Styles */
+        #global-message-container {
+            position: fixed; top: 1rem; right: 1rem; z-index: 10000;
+            display: flex; flex-direction: column; gap: 0.5rem;
+            max-width: 300px;
+        }
+        .message-toast {
+            padding: 0.75rem 1rem; border-radius: 0.5rem;
+            font-size: 0.875rem; font-weight: 500;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+            opacity: 0; transform: translateY(-10px);
+        }
+        .message-toast.show { opacity: 1; transform: translateY(0); }
+        .message-toast.error { background-color: var(--error-color); color: white; }
+        .message-toast.success { background-color: var(--success-color); color: white; }
+        .message-toast.info { background-color: var(--info-color); color: white; }
+        .message-toast.warning { background-color: var(--warning-color); color: white; }
+
+        #initial-admin-setup {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); z-index: 1000;
+            width: min(90vw, 500px); background-color: var(--card-bg);
+            border: 1px solid var(--border-color); border-radius: 0.75rem;
+            padding: 1.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        /* Status colors for file info table */
+        .status-ok { color: var(--success-color); }
+        .status-outdated { color: var(--warning-color); }
+        .status-missing { color: var(--error-color); }
+        .status-new-on-device { color: var(--info-color); } /* For files newer locally than remote */
+        .status-fetch-failed { color: var(--error-color); } /* For remote fetch failures */
+
+        /* Digital Clock Styles */
+        .digital-display-clock {
+            position: relative;
+            background-color: #0c121d; /* Dark background */
+            border: 1px solid #374151;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            margin-bottom: 1.5rem; /* Space below the clock */
+            color: #22d3ee; /* Accent color for digits */
+            font-family: 'Inter', sans-serif;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .digital-display-clock .clock-brand {
+            font-size: 0.7rem;
+            color: #9ca3af; /* Secondary text color */
+            margin-bottom: 0.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .digital-display-clock .time-lcd span {
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: block;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .digital-display-clock .info-lcd {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: #9ca3af;
+        }
+
+        .digital-display-clock .info-segment {
+            background-color: #1f2937; /* Card background */
+            padding: 0.4rem 0.6rem;
+            border-radius: 0.3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .digital-display-clock .info-segment .value {
+            font-weight: 600;
+            color: #f9fafb; /* Primary text color for values */
+        }
+
+        .digital-display-clock .location-display {
+            font-size: 0.8rem;
+            color: #f9fafb;
+            margin-top: 0.75rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 0 0.5rem;
+        }
+
+        .digital-display-clock.seven-segment-active .time-lcd span {
+            font-family: 'Digital-7', monospace; /* Fallback to monospace if Digital-7 not loaded */
+            text-shadow: 0 0 5px #22d3ee;
+            color: #22d3ee; /* Accent color */
+        }
+
+        /* Basic modal styles for clock settings */
+        .clock-config-modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(0, 0, 0, 0.75);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .clock-config-modal {
+            background-color: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 10px 15px rgba(0,0,0,0.3);
+        }
+
+        .clock-config-modal h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+        }
+
+        .clock-config-modal .config-option {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .clock-config-modal .config-option label {
+            flex-basis: 100%;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .clock-config-modal .config-option button {
+            flex: 1;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            background-color: #374151;
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .clock-config-modal .config-option button:hover {
+            background-color: #4b5563;
+        }
+
+        .clock-config-modal .config-option button.active {
+            background-color: var(--accent-color);
+            color: black;
+            font-weight: 600;
+            border-color: var(--accent-color);
+        }
+
+        .clock-config-modal .location-search-form {
+            display: flex;
+            gap: 0.5rem;
+            width: 100%;
+        }
+        .clock-config-modal .location-search-form input[type="text"] {
+            flex-grow: 1;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.875rem;
+        }
+        .clock-config-modal .location-search-form button {
+            flex-grow: 0;
+            padding: 0.5rem 1rem;
+        }
+
+        .clock-config-modal input[type="text"],
+        .clock-config-modal input[type="password"] {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background-color: #111827;
+            border: 1px solid #374151;
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .clock-config-modal .config-error {
+            color: var(--error-color);
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .close-modal-button {
+            background-color: #4b5563;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+            margin-top: 1.5rem;
+            transition: background-color 0.2s;
+        }
+
+        .close-modal-button:hover {
+            background-color: #6b7280;
+        }
+
+        @font-face {
+            font-family: 'Digital-7';
+            src: url('https://raw.githubusercontent.com/seven-segment/7-Segment/master/7_Segment.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+    </style>
+</head>
+<body class="font-sans antialiased">
+
+    <div id="global-message-container"></div>
+
+    <div class="flex flex-col lg:flex-row h-screen w-full">
+        <!-- Sidebar -->
+        <aside class="sidebar w-full lg:w-80 flex-shrink-0 p-6 flex flex-col justify-between">
+            <div>
+                <div class="flex items-center justify-between lg:justify-start gap-3 mb-6">
+                    <i data-lucide="raspberry-pi" class="w-10 h-10 text-pink-500"></i>
+                    <div>
+                        <h1 class="text-xl font-bold text-white">π-Backend</h1>
+                        <p class="text-xs text-gray-400">Version: <span id="api-version-text">...</span></p>
+                    </div>
+                </div>
+
+                <!-- Digital Clock Placeholder (Moved here) -->
+                <div id="digital-clock-container" class="mb-6"></div>
+
+                <div class="card p-4 space-y-4">
+                    <h2 class="text-md font-semibold text-gray-300 flex items-center gap-2"><i data-lucide="gauge-circle" class="w-5 h-5 text-cyan-400"></i>System Status</h2>
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                        <div class="sidebar-metric"><div class="text-gray-400">CPU</div><div id="cpu-usage-val" class="font-mono font-bold text-lg">...</div></div>
+                        <div class="sidebar-metric"><div class="text-gray-400">Temp</div><div id="cpu-temp-val" class="font-mono font-bold text-lg">...</div></div>
+                        <div class="sidebar-metric"><div class="text-gray-400">Memory</div><div id="memory-usage-val" class="font-mono font-bold text-lg">...</div></div>
+                        <div class="sidebar-metric"><div class="text-gray-400">Disk</div><div id="disk-usage-val" class="font-mono font-bold text-lg">...</div></div>
+                        <div class="sidebar-metric col-span-2"><div class="text-gray-400">Time Sync (GPS)</div><div id="time-offset" class="font-mono font-bold text-lg">...</div></div>
+                    </div>
+                </div>
+
+                <nav class="mt-6 space-y-4">
+                    <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">Controls</h2>
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between text-sm">
+                            <label for="poll-interval" class="text-gray-400">Refresh (s):</label>
+                            <input type="number" id="poll-interval" value="5" min="1" class="w-16">
+                        </div>
+                        <button id="toggle-polling-btn" class="api-btn secondary w-full text-sm"><i data-lucide="play-circle" class="w-4 h-4"></i><span>Start Refresh</span></button>
+                    </div>
+                </nav>
+            </div>
+            <div class="space-y-3 mt-8 lg:mt-0"><div id="api-status-badge" class="text-sm font-bold px-3 py-1 rounded-full inline-block">Checking...</div></div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
+            <header class="mb-6">
+                <div id="tabs" class="flex items-center border-b border-gray-800 text-sm font-medium text-gray-400 flex-wrap">
+                    <button class="tab-button active px-4 py-2" data-tab="overview">Overview</button>
+                    <button class="tab-button px-4 py-2" data-tab="gps">GPS</button>
+                    <button class="tab-button px-4 py-2" data-tab="time">Time</button>
+                    <button class="tab-button px-4 py-2" data-tab="hardware">Hardware</button>
+                    <button class="tab-button px-4 py-2" data-tab="location">Location</button>
+                    <button class="tab-button px-4 py-2" data-tab="weather">Weather</button>
+                    <button class="tab-button px-4 py-2" data-tab="update">Update</button> <!-- New Update Tab -->
+                    <button class="tab-button px-4 py-2 hidden" data-tab="users" id="users-tab-button">Users</button>
+                    <button class="tab-button px-4 py-2" data-tab="admin">Keys & Admin</button>
+                </div>
+            </header>
+
+            <div class="max-w-7xl mx-auto">
+                <!-- Overview Tab -->
+                <div id="tab-overview" class="tab-content space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="map-pin" class="w-5 h-5 text-cyan-400"></i>Location & GPS (Summary)</h2>
+                            <div class="space-y-2 text-sm">
+                                <div class="flex justify-between text-gray-400"><span>Fix:</span><span id="overview-gps-fix-type" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Coords:</span><span id="overview-gps-coords" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Altitude:</span><span id="overview-gps-altitude" class="font-mono text-white">...</span></div>
+                            </div>
+                        </div>
+                        <div class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="database" class="w-5 h-5 text-cyan-400"></i>Database (Summary)</h2>
+                            <div class="space-y-2 text-sm">
+                                <div class="flex justify-between text-gray-400"><span>Size:</span><span id="overview-db-size" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Sensor Rows:</span><span id="overview-db-sensor" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Users:</span><span id="overview-db-users" class="font-mono text-white">...</span></div>
+                            </div>
+                        </div>
+                        <div class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="thermometer-sun" class="w-5 h-5 text-cyan-400"></i>Sense HAT & System (Summary)</h2>
+                            <div class="space-y-2 text-sm">
+                                <div class="flex justify-between text-gray-400"><span>CPU Usage:</span><span id="overview-cpu-usage" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Memory:</span><span id="overview-memory-usage" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Disk:</span><span id="overview-disk-usage" class="font-mono text-white">...</span></div>
+                                <div class="flex justify-between text-gray-400"><span>Sense HAT Temp:</span><span id="overview-sh-temp" class="font-mono text-white">...</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="p-4 flex justify-between items-center border-b border-gray-800">
+                            <h3 class="text-base font-semibold text-gray-400 uppercase tracking-wider">API Response Log</h3>
+                            <button id="clear-output-btn" class="text-xs bg-rose-600 hover:bg-rose-700 text-white font-bold py-1 px-3 rounded-md transition-colors">Clear</button>
+                        </div>
+                        <div class="p-4 h-64 overflow-y-auto"><pre id="api-output" class="text-xs whitespace-pre-wrap break-all"></pre></div>
+                    </div>
+                </div>
+
+                <!-- GPS Tab -->
+                <div id="tab-gps" class="tab-content">
+                    <div class="card p-4 h-[calc(100vh-12rem)] flex flex-col">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="satellite" class="w-5 h-5 text-cyan-400"></i>GPS Data</h2>
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 p-4 flex-shrink-0">
+                            <div class="bg-gray-900 p-3 rounded-lg text-center"><div class="text-gray-400 text-xs">Fix Type</div><div id="gps-fix-type" class="text-lg font-bold text-white">...</div></div>
+                            <div class="bg-gray-900 p-3 rounded-lg text-center"><div class="text-gray-400 text-xs">Latitude</div><div id="gps-latitude" class="text-lg font-bold text-white">...</div></div>
+                            <div class="bg-gray-900 p-3 rounded-lg text-center"><div class="text-gray-400 text-xs">Longitude</div><div id="gps-longitude" class="text-lg font-bold text-white">...</div></div>
+                            <div class="bg-gray-900 p-3 rounded-lg text-center"><div class="text-gray-400 text-xs">Altitude</div><div id="gps-altitude" class="text-lg font-bold text-white">...</div></div>
+                            <div class="bg-gray-900 p-3 rounded-lg text-center col-span-2 lg:col-span-1"><div class="text-gray-400 text-xs">Speed</div><div id="gps-speed" class="text-lg font-bold text-white">...</div></div>
+                        </div>
+                        <div class="flex-grow bg-gray-800 rounded-lg overflow-hidden mt-4">
+                            <iframe id="osm-map" class="w-full h-full border-0" loading="lazy" allowfullscreen src="about:blank"></iframe>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Time Tab -->
+                <div id="tab-time" class="tab-content grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="clock" class="w-5 h-5 text-cyan-400"></i>Synchronization Status</h2>
+                        <div class="space-y-3 text-sm">
+                            <div class="flex justify-between text-gray-400"><span>Reference Source:</span><span id="time-ref-source" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>Stratum:</span><span id="time-stratum" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>System Time Offset:</span><span id="time-offset-full" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>Last Update:</span><span id="time-last-update" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>Chrony Service Status:</span><span id="chrony-status" class="font-mono text-white">...</span></div>
+                        </div>
+                    </div>
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="activity" class="w-5 h-5 text-cyan-400"></i>Clock Performance</h2>
+                        <div class="space-y-4 text-sm">
+                            <div class="flex justify-between text-gray-400"><span>Root Delay:</span><span id="time-root-delay" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>Root Dispersion:</span><span id="time-root-dispersion" class="font-mono text-white">...</span></div>
+                            <div class="flex justify-between text-gray-400"><span>Frequency Skew:</span><span id="time-freq-skew" class="font-mono text-white">...</span></div>
+                            <div class="text-gray-500 text-xs mt-2" id="freq-skew-explanation">...</div> <!-- Explanation added here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hardware Tab -->
+                <div id="tab-hardware" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="cpu" class="w-5 h-5 text-cyan-400"></i>Hardware Control Panel</h2>
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                            <button class="api-btn secondary" onclick="makeApiCall('/hardware/bluetooth-scan', 'POST', null, 'hardwareControlOutput')"><i data-lucide="bluetooth" class="w-4 h-4"></i>Scan Bluetooth</button>
+                            <button class="api-btn secondary" onclick="makeApiCall('/hardware/lte/flight-mode', 'POST', { enable: true }, 'hardwareControlOutput')"><i data-lucide="plane" class="w-4 h-4"></i>Flight Mode ON</button>
+                            <button class="api-btn secondary" onclick="makeApiCall('/hardware/lte/flight-mode', 'POST', { enable: false }, 'hardwareControlOutput')"><i data-lucide="plane-off" class="w-4 h-4"></i>Flight Mode OFF</button>
+                            <!-- Add LTE Network Info Button -->
+                            <button class="api-btn secondary" onclick="makeApiCall('/hardware/lte/network-info', 'GET', null, 'hardwareControlOutput')"><i data-lucide="signal" class="w-4 h-4"></i>LTE Network Info</button>
+                        </div>
+                        <div id="hardwareControlOutput" class="response-box hidden"></div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="thermometer-sun" class="w-5 h-5 text-cyan-400"></i>Sense HAT Sensors</h2>
+                            <div id="sensehat-data-container" class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                                <!-- Data will be injected here by JS -->
+                                <div class="space-y-1"><div class="grid-item-label">Temperature (C)</div><div id="sensehat-temp" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Humidity (%)</div><div id="sensehat-humidity" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Pressure (hPa)</div><div id="sensehat-pressure" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Pitch (deg)</div><div id="sensehat-pitch" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Roll (deg)</div><div id="sensehat-roll" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Yaw (deg)</div><div id="sensehat-yaw" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Accel X (g)</div><div id="sensehat-accel-x" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Accel Y (g)</div><div id="sensehat-accel-y" class="grid-item-value">...</div></div>
+                                <div class="space-y-1"><div class="grid-item-label">Accel Z (g)</div><div id="sensehat-acc-z" class="grid-item-value">...</div></div>
+                            </div>
+                        </div>
+                        <div class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="layout-grid" class="w-5 h-5 text-cyan-400"></i>Sense HAT LED Control</h2>
+                            <div class="space-y-4">
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2 text-gray-400">Scroll Text</h3>
+                                    <div class="flex items-center gap-2">
+                                        <input type="text" id="sensehat-text-input" class="w-full" placeholder="Enter text">
+                                        <button class="api-btn secondary" onclick="sensehatScrollText()"><i data-lucide="message-square" class="w-4 h-4"></i>Scroll</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 class="text-sm font-semibold mb-2 text-gray-400">Clear Display</h3>
+                                    <button class="api-btn secondary bg-rose-600 hover:bg-rose-700" onclick="sensehatClearDisplay()"><i data-lucide="eraser" class="w-4 h-4"></i>Clear LEDs</button>
+                                </div>
+                                <div id="sensehat-control-output" class="response-box hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Location Services Tab -->
+                <div id="tab-location" class="tab-content grid grid-cols-1 lg:grid-cols-2 gap-6">
+                     <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="search" class="w-5 h-5 text-cyan-400"></i>Geocoding (Name to Coords)</h2>
+                        <div class="flex gap-2">
+                            <input type="text" id="geocode-input" class="w-full" placeholder="e.g., London, UK">
+                            <button class="api-btn" onclick="geocodeLocation()">Find</button>
+                        </div>
+                        <div id="geocode-output" class="response-box hidden"></div>
+                    </div>
+                     <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="search" class="w-5 h-5 text-cyan-400"></i>Reverse Geocoding</h2>
+                        <div class="flex gap-2">
+                            <input type="text" id="reverse-geocode-lat" class="w-full" placeholder="Latitude (from GPS)">
+                            <input type="text" id="reverse-geocode-lon" class="w-full" placeholder="Longitude (from GPS)">
+                            <button class="api-btn" onclick="reverseGeocodeLocation()">Find</button>
+                        </div>
+                        <div id="reverse-geocode-output" class="response-box hidden"></div>
+                    </div>
+                    <!-- New: Community Services Section -->
+                    <div class="card p-6 lg:col-span-2">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="users" class="w-5 h-5 text-cyan-400"></i>Community Services (Nearby POIs)</h2>
+                        <div class="flex flex-col sm:flex-row gap-2 mb-3">
+                            <input type="text" id="community-types-input" class="w-full" placeholder="e.g., park,cafe (optional types)">
+                            <button class="api-btn" onclick="getNearbyPois()">Find Nearby</button>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-4">Uses current GPS location. Enter optional comma-separated place types.</p>
+                        <div id="community-output" class="response-box hidden"></div>
+                    </div>
+                </div>
+
+                <!-- Weather Services Tab -->
+                <div id="tab-weather" class="tab-content">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="cloud-sun" class="w-5 h-5 text-cyan-400"></i>External Weather Services Test</h2>
+                        <div class="flex flex-col sm:flex-row gap-2"><input type="text" id="weather-location-input" class="w-full" placeholder="Enter a city or leave blank for GPS"><button class="api-btn" onclick="fetchWeather()">Fetch Weather</button></div>
+                        <p class="text-xs text-gray-500 mt-2 mb-4">Note: Services may fail if their API keys are not in the database.</p>
+                        <div id="weather-output-container" class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <!-- Weather cards will be injected here by JS -->
+                            <div class="weather-card bg-gray-900 p-4 rounded-lg flex flex-col justify-between" id="weather-card-openweathermap">
+                                <h3 class="font-bold text-cyan-400">OpenWeatherMap</h3>
+                                <div class="text-center my-2"><i data-lucide="cloud" class="weather-card-icon text-gray-400"></i></div>
+                                <div class="mt-2 space-y-1 text-sm text-center">
+                                    <p><strong>Temp:</strong> <span class="temp-val">...</span>°C</p>
+                                    <p><strong>Desc:</strong> <span class="desc-val">...</span></p>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-auto pt-2 text-center">
+                                    <button class="raw-btn hover:text-cyan-400 hidden" onclick="">Show Raw</button>
+                                </div>
+                            </div>
+                            <div class="weather-card bg-gray-900 p-4 rounded-lg flex flex-col justify-between" id="weather-card-noaa">
+                                <h3 class="font-bold text-cyan-400">NOAA</h3>
+                                <div class="text-center my-2"><i data-lucide="sun" class="weather-card-icon text-gray-400"></i></div>
+                                <div class="mt-2 space-y-1 text-sm text-center">
+                                    <p><strong>Temp:</strong> <span class="temp-val">...</span>°C</p>
+                                    <p><strong>Desc:</strong> <span class="desc-val">...</span></p>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-auto pt-2 text-center">
+                                    <button class="raw-btn hover:text-cyan-400 hidden" onclick="">Show Raw</button>
+                                </div>
+                            </div>
+                            <div class="weather-card bg-gray-900 p-4 rounded-lg flex flex-col justify-between" id="weather-card-windy">
+                                <h3 class="font-bold text-cyan-400">Windy.com</h3>
+                                <div class="text-center my-2"><i data-lucide="wind" class="weather-card-icon text-gray-400"></i></div>
+                                <div class="mt-2 space-y-1 text-sm text-center">
+                                    <p><strong>Temp:</strong> <span class="temp-val">...</span>°C</p>
+                                    <p><strong>Desc:</strong> <span class="desc-val">...</span></p>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-auto pt-2 text-center">
+                                    <button class="raw-btn hover:text-cyan-400 hidden" onclick="">Show Raw</button>
+                                </div>
+                            </div>
+                            <div class="weather-card bg-gray-900 p-4 rounded-lg flex flex-col justify-between" id="weather-card-accuweather">
+                                <h3 class="font-bold text-cyan-400">AccuWeather</h3>
+                                <div class="text-center my-2"><i data-lucide="cloud-lightning" class="weather-card-icon text-gray-400"></i></div>
+                                <div class="mt-2 space-y-1 text-sm text-center">
+                                    <p><strong>Temp:</strong> <span class="temp-val">...</span>°C</p>
+                                    <p><strong>Desc:</strong> <span class="desc-val">...</span></p>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-auto pt-2 text-center">
+                                    <button class="raw-btn hover:text-cyan-400 hidden" onclick="">Show Raw</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- New Tab: Update -->
+                <div id="tab-update" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="arrow-big-up-dash" class="w-5 h-5 text-cyan-400"></i>System Updates</h2>
+                        <div class="flex flex-col sm:flex-row items-center gap-4 mb-4">
+                            <span class="text-gray-400">Compare against:</span>
+                            <div class="flex gap-2">
+                                <button id="compare-local-btn" class="api-btn secondary">Local Source</button>
+                                <button id="compare-github-btn" class="api-btn secondary">GitHub Repo</button>
+                            </div>
+                            <button id="update-from-github-btn" class="api-btn bg-green-600 hover:bg-green-700 ml-auto"><i data-lucide="download-cloud" class="w-4 h-4"></i>Update from GitHub</button>
+                        </div>
+                        <p class="text-sm text-gray-500 mb-4" id="update-status-message">Select a comparison source to view file status.</p>
+                        <div id="file-comparison-output" class="response-box min-h-[200px] text-gray-300">
+                            <!-- File comparison table will be inserted here by JS -->
+                            <p class="text-center text-gray-500">No comparison data yet.</p>
+                        </div>
+                    </div>
+                </div>
+
+
+                <!-- User Management Tab -->
+                <div id="tab-users" class="tab-content hidden">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="users" class="w-5 h-5 text-cyan-400"></i>User Management</h2>
+                        <div class="space-y-6">
+                            <div>
+                                <h3 class="text-md font-semibold mb-3">All Users</h3>
+                                <div id="userListOutput" class="response-box min-h-[150px]"></div>
+                                <button class="api-btn secondary mt-3" onclick="listAllUsers()">Refresh Users</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <h3 class="text-md font-semibold mb-3">Add New User</h3>
+                                    <div class="space-y-3">
+                                        <input type="text" id="addUsername" placeholder="Username" class="w-full">
+                                        <input type="password" id="addPassword" placeholder="Password" class="w-full">
+                                        <select id="addRole" class="w-full">
+                                            <option value="user">User</option>
+                                            <option value="admin">Admin</option>
+                                        </select>
+                                        <button class="api-btn w-full" onclick="addNewUser()">Add User</button>
+                                    </div>
+                                    <div id="addUserOutput" class="response-box hidden"></div>
+                                </div>
+                                <div>
+                                    <h3 class="text-md font-semibold mb-3">Manage Existing User</h3>
+                                    <div class="space-y-3">
+                                        <input type="text" id="manageUsername" placeholder="Select a user from the list" class="w-full" readonly>
+                                        <input type="password" id="updatePassword" placeholder="New Password (optional)" class="w-full">
+                                        <select id="updateRole" class="w-full">
+                                            <option value="">Select New Role</option>
+                                            <option value="user">User</option>
+                                            <option value="admin">Admin</option>
+                                        </select>
+                                        <div class="flex gap-3">
+                                            <button class="api-btn w-full" onclick="updateUser()">Update</button>
+                                            <button class="api-btn bg-red-600 hover:bg-red-700 w-full" onclick="deleteUser()">Delete</button>
+                                        </div>
+                                    </div>
+                                    <div id="manageUserOutput" class="response-box hidden"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Tab -->
+                <div id="tab-admin" class="tab-content">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div id="admin-login-panel" class="card p-6">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="log-in" class="w-5 h-5 text-cyan-400"></i>Admin Login</h2>
+                            <div id="admin-logged-out-view" class="space-y-3">
+                                <input type="text" id="adminLoginUsername" placeholder="Admin Username" class="w-full">
+                                <input type="password" id="adminLoginPassword" placeholder="Admin Password" class="w-full">
+                                <button class="api-btn w-full" id="adminLoginBtn">Login</button>
+                                <div id="adminLoginOutput" class="response-box hidden"></div>
+                            </div>
+                            <div id="admin-logged-in-view" class="hidden text-center">
+                                <p class="text-green-400">Logged in as <strong id="loggedInUsername"></strong></p>
+                                <button class="api-btn secondary w-full mt-4" id="adminLogoutBtn">Logout</button>
+                            </div>
+                        </div>
+                        <div id="key-manager-panel" class="card p-6 hidden">
+                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="key-round" class="w-5 h-5 text-cyan-400"></i>API Key Manager</h2>
+                            <div id="apiKeysOutput" class="response-box min-h-[200px] mb-4"></div>
+                            <div class="space-y-4">
+                                <div>
+                                    <h3 class="font-semibold mb-2 text-gray-400">Store External/Update Key</h3>
+                                    <div class="space-y-2">
+                                        <select id="externalKeyNameSelect" class="w-full">
+                                            <!-- Options populated by JS -->
+                                        </select>
+                                        <input type="text" id="externalKeyNameOther" class="w-full hidden mt-2" placeholder="Custom Key Name">
+                                        <textarea id="externalKeyValue" placeholder="Paste the key value here" class="w-full h-24" style="resize:none;"></textarea>
+                                        <button class="api-btn w-full" onclick="storeOrUpdateKey()">Store / Update Key</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 class="font-semibold mb-2 text-gray-400">Generate Internal Key</h3>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="internalKeyName" placeholder="Name for new internal key" class="w-full"><button class="api-btn" onclick="generateInternalKey()">Generate</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="keyManagerOutput" class="response-box hidden"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Initial Admin Setup Modal -->
+    <div id="initial-admin-setup" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div class="bg-gray-800 card p-6 w-full max-w-md mx-auto">
+            <h2 class="text-xl font-bold text-white mb-4 flex items-center gap-2"><i data-lucide="shield-alert" class="w-6 h-6 text-yellow-400"></i>Action Required: Initial Setup!</h2>
+            <p class="text-gray-300 mb-4">Your backend is running without a configured admin account. For security, please set up your primary admin account now.</p>
+            <div class="space-y-3">
+                <input type="password" id="initialPassword" placeholder="Enter new admin password" class="w-full">
+                <input type="password" id="confirmInitialPassword" placeholder="Confirm new admin password" class="w-full">
+            </div>
+            <button id="createInitialAdminBtn" class="api-btn w-full mt-6">Set Admin Password</button>
+            <div id="initialAdminOutput" class="response-box hidden"></div>
+        </div>
+    </div>
+
+    <script>
+    // DigitalDisplayClock component (to be rendered into #digital-clock-container)
+    function DigitalDisplayClock() {
+        const [time, setTime] = useState({ timeString: '--:--:--', dateString: '--- --', dayString: '---' });
+        const [location, setLocation] = useState({ name: 'Fetching...', title: 'Fetching location...' });
+        const [weather, setWeather] = useState({ temp: '--.-°F', humidity: '--%' });
+        const [is24HourFormat, setIs24HourFormat] = useState(true);
+        const [is7SegmentStyle, setIs7SegmentStyle] = useState(false);
+        const [isModalOpen, setIsModalOpen] = useState(false);
+        const [configError, setConfigError] = useState('');
+        const [manualLocationInput, setManualLocationInput] = useState('');
+        
+        const updateClockDisplay = useCallback(() => {
+            const now = new Date();
+            let hours = now.getHours();
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            const seconds = now.getSeconds().toString().padStart(2, '0');
+            let ampm = '';
+
+            if (!is24HourFormat) {
+                ampm = hours >= 12 ? ' PM' : ' AM';
+                hours = hours % 12;
+                hours = hours ? hours : 12; // the hour '0' should be '12'
+            }
+            const hoursStr = hours.toString().padStart(2, '0');
+            
+            setTime({
+                timeString: `${hoursStr}:${minutes}:${seconds}${ampm}`,
+                dateString: `${MONTH_NAMES[now.getMonth()]} ${now.getDate().toString().padStart(2, '0')}`,
+                dayString: DAY_NAMES[now.getDay()]
+            });
+        }, [is24HourFormat]);
+
+        useEffect(() => {
+            const timerId = setInterval(updateClockDisplay, 1000);
+            return () => clearInterval(timerId);
+        }, [updateClockDisplay]);
+
+        const fetchWeatherData = useCallback(async (latitude, longitude) => {
+            try {
+                const weatherResponse = await fetch(`${PI_API_BASE_URL}/services/weather-test?location=${latitude},${longitude}`);
+                if (!weatherResponse.ok) {
+                    let statusText = `Weather API HTTP ${weatherResponse.status}: ${weatherResponse.statusText}`;
+                    try {
+                        const errorBody = await weatherResponse.json();
+                        statusText = errorBody.message || errorBody.error || statusText;
+                    } catch (e) {}
+                    throw new Error(statusText);
+                }
+                const weatherData = await weatherResponse.json();
+                const normalizedWeatherData = weatherData.weather_data.openweathermap?.normalized_data?.current; // Get from first service
+                
+                if (normalizedWeatherData && typeof normalizedWeatherData.temperature_c === 'number' && typeof normalizedWeatherData.humidity === 'number') {
+                    const tempF = (normalizedWeatherData.temperature_c * 9/5) + 32;
+                    setWeather({ temp: `${tempF.toFixed(1)}°F`, humidity: `${normalizedWeatherData.humidity.toFixed(0)}%` });
+                    setConfigError(prev => prev.replace(/Weather: [^.]+(\.)?(\s)?/gi, "").trim());
+                } else {
+                    throw new Error("Invalid weather data format from API.");
+                }
+            } catch (error) {
+                let weatherErrorMsg = `Weather: ${error.message || "Fetch Error."}`;
+                console.error(`Error fetching weather data: ${error.message}`, error);
+                setConfigError(prev => (prev.replace(/Weather: [^.]+(\.)?(\s)?/gi, "").trim() + " " + weatherErrorMsg).trim());
+                setWeather({ temp: '--.-°F', humidity: '--%' });
+            }
+        }, []);
+
+        const fetchAndSetLocation = useCallback(async (source, queryOrCoords = null) => {
+            setLocation({ name: "Updating...", title: "Updating..." });
+            let latitude, longitude;
+            let locationNameForDisplay = "Location Unavailable";
+            let locationSourcePrefix = "";
+            
+            try {
+                if (source === 'manual') {
+                    locationSourcePrefix = "Manual: ";
+                    if (!queryOrCoords) throw new Error("Manual location query is empty.");
+                    const geoResponse = await fetch(`${PI_API_BASE_URL}/services/location-test?location=${encodeURIComponent(queryOrCoords)}`);
+                    if (!geoResponse.ok) throw new Error(`API HTTP ${geoResponse.status}: ${geoResponse.statusText}`);
+                    const geoData = await geoResponse.json();
+                    if (!geoData?.latitude) throw new Error("Location not found via manual search.");
+                    latitude = geoData.latitude;
+                    longitude = geoData.longitude;
+                    locationNameForDisplay = `${geoData.address || 'Unknown'}`;
+                    localStorage.setItem('ddsClockLastUsed', 'manual');
+                    localStorage.setItem('ddsClockLocationManualPi', queryOrCoords); // Store just the query for re-use
+                } else if (source === 'pi_gps') {
+                    try {
+                        locationSourcePrefix = "Pi GPS: ";
+                        const gpsResponse = await fetch(`${PI_API_BASE_URL}/hardware/gps/best`);
+                        if (!gpsResponse.ok) throw new Error(`Pi GPS API HTTP ${gpsResponse.status}: ${gpsResponse.statusText}`);
+                        const gpsData = await gpsResponse.json();
+                        if (!gpsData || typeof gpsData.latitude !== 'number') throw new Error("Pi GPS data invalid or no fix.");
+                        latitude = gpsData.latitude;
+                        longitude = gpsData.longitude;
+                        localStorage.setItem('ddsClockLastUsed', 'pi_gps');
+                    } catch (piGpsError) {
+                        console.warn(`Pi GPS error: ${piGpsError.message}. Falling back to browser GPS.`, piGpsError);
+                        setConfigError(prev => (`${prev} Pi GPS Error: ${piGpsError.message}. Trying browser...`).trim());
+                        return fetchAndSetLocation('browser_gps');
+                    }
+                } else { // browser_gps
+                    locationSourcePrefix = "Browser GPS: ";
+                    if (!navigator.geolocation) throw new Error("Browser geolocation is not available.");
+                    const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 }));
+                    latitude = position.coords.latitude;
+                    longitude = position.coords.longitude;
+                    localStorage.setItem('ddsClockLastUsed', 'browser_gps');
+                }
+
+                // Reverse geocode for GPS sources (Pi GPS or Browser GPS)
+                if (source !== 'manual' && latitude !== undefined && longitude !== undefined) {
+                    const reverseGeoResponse = await fetch(`${PI_API_BASE_URL}/services/location-test?lat=${latitude}&lon=${longitude}`);
+                    if (reverseGeoResponse.ok) {
+                        const reverseGeoData = await reverseGeoResponse.json();
+                        if (reverseGeoData?.address) {
+                            locationNameForDisplay = reverseGeoData.address;
+                        }
+                    } else {
+                        console.warn(`Reverse geocoding failed for ${latitude},${longitude}: ${reverseGeoResponse.statusText}`);
+                        locationNameForDisplay = `[${latitude.toFixed(2)}, ${longitude.toFixed(2)}]`;
+                    }
+                }
+
+                const fullLocationString = `${locationSourcePrefix}${locationNameForDisplay} [${latitude.toFixed(2)}, ${longitude.toFixed(2)}]`;
+                setLocation({ name: fullLocationString, title: fullLocationString });
+                setConfigError(prev => prev.replace(/(Location: [^.]+(\.)?(\s)?|GPS Denied(\.)?(\s)?|Pi GPS[^.]+(\.)?(\s)?)/gi, "").trim());
+                await fetchWeatherData(latitude, longitude);
+
+            } catch (error) {
+                const errorDetail = `Location: ${error.message || 'Unknown error'}`;
+                console.error(errorDetail, error);
+                setConfigError(prev => (prev.replace(/(Location: [^.]+(\.)?(\s)?|GPS Denied(\.)?(\s)?|Pi GPS[^.]+(\.)?(\s)?)/gi, "").trim() + " " + errorDetail).trim());
+                setLocation({ name: "Location Error", title: errorDetail });
+                setWeather({ temp: '--.-°F', humidity: '--%' });
+            }
+        }, [fetchWeatherData]);
+
+        useEffect(() => {
+            const lastFormat = localStorage.getItem('ddsClockFormat');
+            setIs24HourFormat(lastFormat !== '12'); // Default to 24 if not set or invalid
+            setIs7SegmentStyle(localStorage.getItem('ddsClockDisplayStyle') === '7segment');
+            
+            const lastUsed = localStorage.getItem('ddsClockLastUsed');
+            let query = null;
+            if (lastUsed === 'manual') {
+                query = localStorage.getItem('ddsClockLocationManualPi');
+            }
+            fetchAndSetLocation(lastUsed || 'pi_gps', query); // Default to pi_gps if no lastUsed
+        }, [fetchAndSetLocation]);
+
+        const toggleClockFormat = (is24) => {
+            setIs24HourFormat(is24);
+            localStorage.setItem('ddsClockFormat', is24 ? '24' : '12');
+        };
+
+        const toggleClockDisplayStyle = (is7Segment) => {
+            setIs7SegmentStyle(is7Segment);
+            localStorage.setItem('ddsClockDisplayStyle', is7Segment ? '7segment' : 'modern');
+        };
+        
+        const handleManualLocationSubmit = (e) => {
+            e.preventDefault();
+            if (manualLocationInput.trim()) {
+                fetchAndSetLocation('manual', manualLocationInput.trim());
+                setConfigError(''); // Clear error on new attempt
+            } else {
+                setConfigError("Please enter a location to search.");
+            }
+        };
+        
+        const handleUseGps = () => {
+            setManualLocationInput('');
+            setConfigError(''); // Clear error on new attempt
+            fetchAndSetLocation('pi_gps');
+        };
+
+        return h('div', { id: "digitalClock", className: `digital-display-clock portal-instance ${is7SegmentStyle ? 'seven-segment-active' : ''}` },
+            h('div', { className: "clock-brand" }, "DEV-CLK"), // Changed from DDS-CLK to DEV-CLK
+            h('div', { className: "time-lcd" },
+                h('span', { id: "clockTime", title: "Current Time" }, time.timeString)
+            ),
+            h('div', { className: "info-lcd" },
+                h('div', { className: "info-segment temp" },
+                    h('span', null, "TEMP"), h('span', { className: "value", id: "clockTemp", title: "Temperature" }, weather.temp)
+                ),
+                h('div', { className: "info-segment date" },
+                    h('span', null, "DATE"), h('span', { className: "value", id: "clockDate", title: "Current Date" }, time.dateString)
+                ),
+                h('div', { className: "info-segment day" },
+                    h('span', null, "DAY"), h('span', { className: "value", id: "clockDay", title: "Day of the Week" }, time.dayString)
+                ),
+                h('div', { className: "info-segment humidity" },
+                    h('span', null, "HUMIDITY"), h('span', { className: "value", id: "clockHumidity", title: "Humidity" }, weather.humidity)
+                )
+            ),
+            h('div', { className: "location-display", id: "clockLocation", title: location.title }, location.name),
+            h('button', { id: "clockConfigBtn", className: "clock-config-button", 'aria-label': "Open clock settings", title: "Clock Settings", onClick: () => setIsModalOpen(true) },
+                h('svg', {width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round"}, h('circle', {cx: "12", cy: "12", r: "3"}),h('path', {d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1.01-.07 1.65 1.65 0 0 0-.85.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0-.33-1.82 1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1.01.07l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1.01-.07l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0 .33 1.82 1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1.01-.07l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82z"}))
+            ),
+            isModalOpen && h('div', { id: "clockConfigModalOverlay", className: "clock-config-modal-overlay", onClick: () => setIsModalOpen(false) },
+                h('div', { id: "clockConfigModal", className: "clock-config-modal", onClick: e => e.stopPropagation() },
+                    h('h3', null, "Clock Settings"),
+                    configError && h('p', { id: "clockConfigError", className: "config-error" }, configError),
+                    h('div', { className: "config-option" },
+                        h('label', null, "Time Format:"),
+                        h('button', { id: "clockFormat24Btn", className: is24HourFormat ? 'active' : '', onClick: () => toggleClockFormat(true) }, "24 Hour"),
+                        h('button', { id: "clockFormat12Btn", className: !is24HourFormat ? 'active' : '', onClick: () => toggleClockFormat(false) }, "12 Hour (AM/PM)")
+                    ),
+                    h('div', { className: "config-option" },
+                        h('label', null, "Display Style:"),
+                        h('button', { id: "clockStyleModernBtn", className: !is7SegmentStyle ? 'active' : '', onClick: () => toggleClockDisplayStyle(false) }, "Modern"),
+                        h('button', { id: "clockStyle7SegmentBtn", className: is7SegmentStyle ? 'active' : '', onClick: () => toggleClockDisplayStyle(true) }, "7-Segment")
+                    ),
+                    h('div', { className: "config-option" },
+                        h('label', { htmlFor: "manualLocationInput" }, "Set Location Manually:"),
+                        h('form', { id: "locationSearchForm", className: "location-search-form", onSubmit: handleManualLocationSubmit },
+                            h('input', { 
+                                type: "text", 
+                                id: "manualLocationInput", 
+                                placeholder: "e.g., City, State or Lat,Lon",
+                                value: manualLocationInput,
+                                onChange: e => setManualLocationInput(e.target.value)
+                            }),
+                            h('button', { type: "submit", title: "Search for this location" }, "Search")
+                        )
+                    ),
+                    h('div', { className: "config-option" },
+                        h('button', { id: "useGPSLocationBtn", className: "gps-button", title: "Attempt to use Pi GPS, fallback to Browser GPS", onClick: handleUseGps }, "Use Current GPS Location")
+                    ),
+                    h('button', { id: "closeClockConfigModalBtn", className: "close-modal-button", onClick: () => setIsModalOpen(false) }, "Close")
+                )
+            )
+        );
+    }
+    </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Initialize A7670E HAT GPS before gpsd starts
+Before=gpsd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/a7670e-gps-init.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

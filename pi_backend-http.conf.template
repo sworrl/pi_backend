@@ -1,0 +1,33 @@
+# ==============================================================================
+# pi_backend - Apache Virtual Host for HTTP (Port 80)
+# Version: 1.0.0
+#
+# This is a template file. The setup.sh script will copy this and replace
+# the placeholders with actual values.
+# ==============================================================================
+
+<VirtualHost *:80>
+    ServerName __SERVER_NAME__
+    DocumentRoot __HTTP_WEB_ROOT__
+    Alias /pi_backend "__INSTALL_PATH__"
+
+    <Directory "__HTTP_WEB_ROOT__">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+    <Directory "__INSTALL_PATH__">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    # --- Proxy Directives for the API ---
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyPass /api/ http://127.0.0.1:5000/api/
+    ProxyPassReverse /api/ http://127.0.0.1:5000/api/
+
+    ErrorLog ${APACHE_LOG_DIR}/pi_backend_error.log
+    CustomLog ${APACHE_LOG_DIR}/pi_backend_access.log combined
+</VirtualHost>
