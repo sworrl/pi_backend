@@ -1,236 +1,142 @@
-pi_backend
-Version: 2.2.0
+# 🥧 pi-backend
 
-Project Overview
-This project is a comprehensive Python backend designed to run on a Raspberry Pi. It provides a robust API server built with Flask and includes a persistent background service for periodic data collection. It is designed to be the central API and data-logging service for any number of frontend applications.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sworrl/pi_backend/main/icon.png" alt="pi-backend logo" width="150"/>
+</p>
 
-Core Features
-RESTful API Server: Provides endpoints for real-time data and control under the /api/ path.
+<p align="center">
+  <strong>A comprehensive, hardware-integrated backend for the Raspberry Pi.</strong>
+  <br />
+  <br />
+  <img src="https://img.shields.io/badge/version-v4.6.0-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/python-3.x-green.svg" alt="Python" />
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey.svg" alt="License" />
+</p>
 
-Background Data Polling Service: A systemd service that runs on boot, periodically fetches data from the API, and stores it in the local database.
+---
 
-Configurable Polling: Polling frequencies for different data points (GNSS, weather, etc.) can be easily changed in a .ini file without touching the code.
+**π-Backend** transforms your Raspberry Pi into a powerful, multi-purpose server. It provides a robust RESTful API built with Flask, a persistent background service for data collection, and a deep integration with a wide range of hardware components. Whether you're building a personal dashboard, a remote sensor station, or a home automation hub, this project provides the foundational services you need.
 
-Hardware Interfacing: Real-time data and control for the Sense HAT, GNSS (via gpsd or UART), Bluetooth, and LTE Modems (via GPIO and Serial).
+## ✨ Features
 
-Installer & Updater: A comprehensive setup.sh script automates installation, updates, and service management.
+| Feature                   | Description                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 🌐 **RESTful API Server** | A secure, extensible API serving real-time data and control functions, powered by Flask and Gunicorn.     |
+| 🔄 **Background Polling** | A `systemd` service runs on boot, automatically collecting and logging time-series data to a database.  |
+| 🔒 **Unified Security** | Integrated user authentication (Argon2 hashing) and API key management for secure endpoint access.      |
+| 🤖 **Hardware Interface** | Direct control and data retrieval from Sense HAT, GPS/GNSS modules, LTE modems, and Bluetooth.          |
+| ☁️ **Cloud Service Bridge** | Aggregates data from multiple external weather and location APIs (OpenWeather, NOAA, Windy, etc.).      |
+| 🛰️ **Local Services** | Provides local information like nearby points of interest (police, fire stations) and astronomy data. |
+| 🗄️ **Database-Driven** | All application data, logs, and configuration are managed within a central SQLite database.            |
+| 🚀 **Automated Installer** | A comprehensive installer script handles all dependencies, setup, service installation, and updates.  |
 
-Secure API Key Management: Uses a permission-restricted API.keys file and provides an endpoint (/api/keys) to update keys securely from a frontend UI.
+## ⚙️ Core Services
 
-The Data Poller Service
-A key feature of this backend is the pi_backend_poller service. This is a Python script that runs continuously in the background and is managed by systemd, ensuring it starts automatically on boot.
+### 1. RESTful API Server (`app.py`)
 
-Its purpose is to automatically collect time-series data without requiring a frontend to be active. It calls its own API (e.g., /api/hardware/gps) and stores the JSON response in a dedicated polled_data table in the database, along with a timestamp and data source.
+The heart of the project is the Flask API server, run as a `gunicorn` process and managed by `systemd`. It exposes all hardware and data functions through a set of secure, authenticated endpoints.
 
-Configuring the Poller
-You can change how often data is collected by editing the configuration file.
+### 2. Background Data Poller (`data_poller.py`)
 
-Example using the default path:
-sudo nano /var/www/pi_backend/poller_config.ini
+The `pi_backend_poller` is a persistent background service that starts on boot. Its primary role is to automatically collect time-series data from its own API and external sources, storing the results in the database. This ensures a continuous log of sensor, GPS, and weather data without requiring an active frontend client.
 
-The file contents are simple:
+Polling frequencies are now managed in the database and can be configured via the web UI.
 
-[Frequencies]
+## 🚀 Installation & Management
 
-Polling intervals. Do not use quotes.
-weather_minutes = 10
-climate_days = 7
-gps_seconds = 10
+The entire lifecycle of the application is managed by a single, powerful installer script.
 
-Simply change the numbers and save the file. Then, restart the service for the changes to take effect:
-sudo systemctl restart pi_backend_poller.service
+### Prerequisites
 
-Setup, Updates, and Service Management
-Prerequisites
-A Raspberry Pi running a recent version of Raspberry Pi OS.
+- A Raspberry Pi running a recent 64-bit version of Raspberry Pi OS.
+- An active internet connection for the initial setup.
 
-An active internet connection.
+### Step-by-Step Installation
 
-Step 1: Download and Run the Script
-Get the pi_backend project files onto your Raspberry Pi. Then, run the interactive installer.
+1.  **Download Project:** Get the `pi_backend` project files onto your Raspberry Pi.
+2.  **Make Executable:** Open a terminal and navigate to the project directory.
+    ```bash
+    chmod +x setup.sh
+    ```
+3.  **Run Installer:** Execute the script as a regular user (it will ask for `sudo` when needed).
+    ```bash
+    ./setup.sh
+    ```
 
-cd /path/to/pi_backend-main/
-chmod +x setup.sh
-./setup.sh
+The script will guide you through an interactive menu to handle:
+- **First-Time Installation:** Installs all dependencies, deploys files, configures hardware, and sets up the `systemd` services.
+- **Updates & Patches:** Compares local files against the source and applies updates as needed.
+- **Service Management:** Start, stop, and check the status of all backend services.
+- **Full Uninstall:** Securely removes all files and configurations.
 
-The script will present a menu:
+---
 
-Install New Backend: For a fresh installation.
+## 🔐 Security
 
-Update Existing Backend: Updates the application files while preserving your data and keys.
+All API endpoints (with the exception of initial setup routes) are protected and require authentication.
 
-Install/Update Data Poller Service: Use this after an initial install or update to set up the background service.
+- **User Authentication:** Use Basic Authentication with a username and password. An `admin` user can be created through the web UI on the first run if no users exist in the database.
+- **API Key Authentication:** Pass a valid API key in the `X-API-Key` request header. Keys can be generated and managed in the **Keys & Admin** tab of the web dashboard.
 
-Quit
+## 📡 API Endpoint Guide
 
-Step 2: CRITICAL - Configure API Keys
-After installation, you must edit the API.keys file.
+### Authentication
+All requests must include either Basic Auth credentials or an `X-API-Key` header.
 
-sudo nano /var/www/pi_backend/API.keys
+### Status & System
 
-Fill in the values for "YOUR_KEY_HERE". The GEMINI_API_KEY can also be set from a frontend UI.
+| Method | Endpoint                    | Description                                                                 |
+| :----- | :-------------------------- | :-------------------------------------------------------------------------- |
+| `GET`  | `/api/status`               | Checks if the API is running. Returns version and default credential status.|
+| `GET`  | `/api/system/file-info`     | Returns version and checksum information for all managed backend files.     |
+| `GET`  | `/api/hardware/system-stats`| Gets detailed system statistics (CPU, memory, disk, boot time).             |
+| `GET`  | `/api/hardware/time-sync`   | Gets detailed time synchronization statistics from `chrony`.                |
 
-Running the Backend Server
-For testing, you can run the app manually. For production, you should run it as a systemd service.
+### Hardware Control & Data
 
-Navigate to your installation directory
-cd /var/www/pi_backend/
-python3 app.py
+| Method | Endpoint                            | Request Body / Params                                        | Description                                                              |
+| :----- | :---------------------------------- | :----------------------------------------------------------- | :----------------------------------------------------------------------- |
+| `GET`  | `/api/hardware/summary`             | (none)                                                       | Provides a high-level summary of detected hardware status (SenseHAT, GPS, LTE). |
+| `GET`  | `/api/hardware/sensehat/data`       | (none)                                                       | Gets all current sensor data from the Sense HAT.                         |
+| `POST` | `/api/hardware/sensehat/execute-command` | `{ "command": "...", "params": {...} }`                 | Executes a command on the Sense HAT (e.g., scroll text, clear display). |
+| `POST` | `/api/hardware/bluetooth-scan`      | (none)                                                       | Scans for nearby Bluetooth devices.                                      |
+| `GET`  | `/api/hardware/gps/best`            | (none)                                                       | Gets the best available GNSS/GPS data from all available sources.        |
+| `GET`  | `/api/hardware/lte/network-info`    | (none)                                                       | Gets status, signal strength, and operator from a connected LTE modem.   |
+| `POST` | `/api/hardware/lte/flight-mode`     | `{ "enable": true }` or `{ "enable": false }`                | Enables or disables the LTE modem's flight mode.                         |
 
-API Endpoint Guide
-All API calls should be made to relative paths starting with /api/.
+### Data Services (Weather, Location, Community)
 
-Status and Configuration
-Method
+| Method | Endpoint                  | Query Parameters (Example)                                   | Description                                                              |
+| :----- | :------------------------ | :----------------------------------------------------------- | :----------------------------------------------------------------------- |
+| `GET`  | `/api/services/weather-test` | `?location=Paris,France`                                     | Fetches and aggregates weather data from all configured external services (OpenWeather, NOAA, etc.). Uses GPS if no location is provided. |
+| `GET`  | `/api/services/location-test` | `?location=Eiffel+Tower` or `?lat=48.8&lon=2.3`              | Geocodes a location string to coordinates or reverse geocodes coordinates to an address. |
+| `GET`  | `/api/community/nearby`   | `?types=police,fire_station`                                 | Finds the closest points of interest (police, fire stations, hospitals, etc.) and PFAS sites based on the device's current GPS location. |
 
-Endpoint
+### User & Key Management (Admin Only)
 
-Request Body
+These endpoints require authentication as an `admin` user.
 
-Description
+| Method   | Endpoint                | Description                                                |
+| :------- | :---------------------- | :--------------------------------------------------------- |
+| `GET`    | `/api/users`            | Lists all registered users in the system.                  |
+| `POST`   | `/api/users`            | Creates a new user with a specified username, password, and role. |
+| `GET`    | `/api/users/<username>` | Gets the details for a specific user.                      |
+| `PUT`    | `/api/users/<username>` | Updates a user's password or role.                         |
+| `DELETE` | `/api/users/<username>` | Deletes a user.                                            |
+| `GET`    | `/api/keys`             | Lists all API keys (names only, for security).             |
+| `POST`   | `/api/keys`             | Adds a new API key. Can be for external services or a generated internal key. |
+| `DELETE` | `/api/keys/<key_name>`  | Deletes an API key.                                        |
 
-GET
+---
 
-/api/version
+## 🔧 Configuration
 
-(none)
+The `pi_backend` uses a database-first approach for configuration.
 
-Returns the version of the running backend, e.g., {"version": "2.2.0"}.
+1.  **Initial Setup:** On the very first run, a `setup_config.ini` file is used to determine essential system paths.
+2.  **Database Migration:** The installer immediately migrates all settings from this `.ini` file into the main application database (`pi_backend.db`). The `.ini` file is then removed.
+3.  **Ongoing Management:** All subsequent configuration changes (API keys, polling intervals, etc.) are managed directly through the web dashboard, providing a central and secure way to control the application.
 
-GET
+## 📄 License
 
-/api/status
-
-(none)
-
-A simple, lightweight endpoint to check if the API is running.
-
-POST
-
-/api/keys
-
-{ "key_name": "GEMINI_API_KEY", "key_value": "AIzaSy..." }
-
-Securely saves or updates an API key in the API.keys file.
-
-Hardware, GNSS & LTE Control
-Method
-
-Endpoint
-
-Request Body / Params
-
-Description
-
-GET
-
-/api/hardware/cpu
-
-(none)
-
-Gets current CPU usage percentage.
-
-GET
-
-/api/hardware/memory
-
-(none)
-
-Gets current memory usage percentage.
-
-GET
-
-/api/hardware/sensehat
-
-(none)
-
-Gets sensor data from the Sense HAT.
-
-GET
-
-/api/hardware/gps
-
-(none)
-
-Gets GNSS data from the gpsd service (now handled by gnss_services.py).
-
-GET
-
-/api/hardware/gps/uart
-
-(none)
-
-Gets raw NMEA GNSS data directly from the default serial port (now handled by gnss_services.py).
-
-GET
-
-/api/hardware/gps/status
-
-(none)
-
-Checks if the gpsd service is running (now handled by gnss_services.py).
-
-GET
-
-/api/hardware/lte/status
-
-?port=/dev/ttyUSB2 (optional)
-
-Gets status, signal strength, and operator from a connected LTE modem.
-
-POST
-
-/api/hardware/lte/power-cycle
-
-(none)
-
-Toggles the LTE modem power by pulsing the GPIO power key.
-
-POST
-
-/api/hardware/lte/flight-mode
-
-{ "enable": true } or { "enable": false }
-
-Enables or disables the modem's flight mode via GPIO.
-
-External Data & Database
-Method
-
-Endpoint
-
-Query Parameters (Example)
-
-Description
-
-GET
-
-/api/location-data
-
-?location=Tokyo&modules=forecast
-
-Resolves a location and fetches Open-Meteo data. Can use GNSS if no location is provided.
-
-GET
-
-/api/weather-data
-
-?location=London,UK&services=openweather
-
-Fetches aggregated weather data from various APIs.
-
-POST
-
-/api/data
-
-{ "data": "your_string_here" }
-
-Saves a generic string to the database.
-
-GET
-
-/api/data
-
-(none)
-
-Retrieves all saved data entries.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
