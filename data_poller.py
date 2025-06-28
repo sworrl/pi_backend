@@ -1,121 +1,193 @@
+# ==============================================================================
+# Pi Backend Data Poller
+# Version: 3.0.0 (Standalone Service)
+# ==============================================================================
+# This script runs as a persistent background service (systemd). It is
+# responsible for periodically polling various API endpoints (both internal
+# and external) and storing the collected data in the database.
 #
-# File: location_services.py
-# Version: 2.1.2 (Fix Application Context)
-#
-# Description: Handles geocoding from location strings to coordinates.
-#
-# Changelog (v2.1.2):
-# - FIX: Modified `get_location_details` and `reverse_geocode_from_coords`
-#   to explicitly accept `db_manager` and `config_manager` instances instead
-#   of relying on `current_app`. This resolves "Working outside of application context"
-#   errors when called from contexts like the data poller service.
-# - REFACTOR: Updated `set_hardware_manager` to allow the Flask app to inject
-#   the `HardwareManager` instance, ensuring consistency.
-#
-# DEV_NOTES:
-# - v2.1.1:
-#   - CRITICAL FIX: Solved "Working outside of application context" error.
-#     The database manager is now correctly accessed from `current_app`
-#     inside the functions, ensuring it's only called during a request.
-# - v2.0.0:
-#   - REFACTOR: Switched to fetching API keys from the database.
-#
-import sys
+# The polling frequencies are determined by the settings in the database,
+# which are initially migrated from setup_config.ini.
+# ==============================================================================
+
+import schedule
 import time
-# Removed flask's current_app import as it will be passed explicitly
-from hardware_manager import HardwareManager # Keep import for type hinting/dependency understanding
+import requests
+import logging
+import json
+import sys
+import os
 
-try:
-    from geopy.geocoders import GoogleV3
-    from geopy.exc import GeocoderTimedOut, GeocoderServiceError
-    GEOPY_AVAILABLE = True
-except ImportError:
-    GEOPY_AVAILABLE = False
-    print("[WARN] geopy library not found. Geocoding features will be disabled.", file=sys.stderr)
+# Ensure the app's root directory is in the Python path
+# This allows us to import other modules from the application
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+if APP_ROOT not in sys.path:
+    sys.path.append(APP_ROOT)
 
-__version__ = "2.1.2"
+from database import DatabaseManager
+from db_config_manager import DBConfigManager
+from hardware_manager import HardwareManager
+import location_services
+import weather_services
+import astronomy_services
 
-_location_cache = {}
-CACHE_EXPIRY_SECONDS = 3600
+__version__ = "3.0.0"
 
-_hw_manager_instance = None 
+# --- Global Instances ---
+db_manager = None
+config_manager = None
+hw_manager = None
 
-def set_hardware_manager(hw_manager_instance):
-    """Allows external injection of HardwareManager instance into this module."""
-    global _hw_manager_instance
-    _hw_manager_instance = hw_manager_instance
+# --- Logging Setup ---
+# Basic logging to stdout for systemd journal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
 
-def _get_from_cache(key):
-    if key in _location_cache and (time.time() - _location_cache[key][0]) < CACHE_EXPIRY_SECONDS:
-        return _location_cache[key][1]
-    return None
+# --- Polling Functions ---
 
-def _set_in_cache(key, data):
-    _location_cache[key] = (time.time(), data)
-
-# Updated to accept db_manager and config_manager explicitly
-def get_location_details(location_query=None, db_manager=None, config_manager=None):
-    if db_manager is None or config_manager is None:
-        return (None, None, {"error": "Database/Config Manager not provided to location_services.get_location_details."})
-
-    # Use the globally injected HardwareManager instance
-    hw_manager_to_use = _hw_manager_instance 
-    if hw_manager_to_use is None:
-        # Fallback if not injected, but this indicates a setup issue in calling code
-        # Attempt to create a new one, though this might lead to multiple instances
-        # and not ideal for long-running processes like data_poller.
-        logging.warning("location_services: HardwareManager not injected. Attempting to create new instance.")
-        hw_manager_to_use = HardwareManager(app_config=config_manager) # Pass config_manager to new instance
-
-    if location_query:
-        cached_location = _get_from_cache(location_query)
-        if cached_location:
-            return cached_location
-
-        if GEOPY_AVAILABLE:
-            api_key = db_manager.get_key_value_by_name('GOOGLE_GEOCODING_API_KEY')
-
-            if api_key:
-                try:
-                    geolocator = GoogleV3(api_key=api_key)
-                    location = geolocator.geocode(location_query, timeout=10)
-                    if location:
-                        result = (location.latitude, location.longitude, {
-                            "source": "Google Geocoding", "query": location_query,
-                            "address": location.address, "latitude": location.latitude,
-                            "longitude": location.longitude
-                        })
-                        _set_in_cache(location_query, result)
-                        return result
-                except Exception as e:
-                    print(f"[ERROR] Geocoding service error: {e}. Falling back.", file=sys.stderr)
-            else:
-                print("[WARN] GOOGLE_GEOCODING_API_KEY not found in database. Geocoding disabled.", file=sys.stderr)
-
-    # Fallback to GNSS
-    if hw_manager_to_use:
-        gps_data = hw_manager_to_use.get_best_gnss_data()
-        if gps_data and "error" not in gps_data and gps_data.get('latitude') is not None:
-            lat, lon = gps_data['latitude'], gps_data['longitude']
-            return (float(lat), float(lon), {"source": "Onboard GNSS", "latitude": float(lat), "longitude": float(lon)})
-
-    return (None, None, {"error": "Failed to resolve location from any source."})
-
-# Updated to accept db_manager explicitly
-def reverse_geocode_from_coords(lat, lon, db_manager):
-    if not GEOPY_AVAILABLE:
-        return {"error": "geopy library not available."}
-    if db_manager is None:
-        return {"error": "Database Manager not provided for reverse geocoding."}
-
-    api_key = db_manager.get_key_value_by_name('GOOGLE_GEOCODING_API_KEY')
-
-    if not api_key:
-        return {"error": "GOOGLE_GEOCODING_API_KEY not found in database."}
+def poll_system_stats():
+    """Polls basic system stats (CPU, Memory, Disk) and saves them."""
+    logging.info("Polling system stats...")
+    if not db_manager:
+        logging.error("Database manager not initialized. Skipping poll.")
+        return
 
     try:
-        geolocator = GoogleV3(api_key=api_key)
-        location = geolocator.reverse((lat, lon), exactly_one=True, timeout=10)
-        return {"address": location.address, "raw": location.raw} if location else {"error": "No address found."}
+        # For system stats, we can call the hardware module directly
+        # as it doesn't rely on the full Flask app context.
+        import hardware
+        cpu_usage = hardware.get_cpu_usage()
+        mem_usage = hardware.get_memory_usage()
+        disk_usage = hardware.get_disk_usage('/')
+
+        db_manager.add_data("system", cpu_usage, "percent", source="psutil", metadata={"metric": "cpu_usage"})
+        db_manager.add_data("system", mem_usage, "percent", source="psutil", metadata={"metric": "memory_usage"})
+        db_manager.add_data("system", disk_usage['percent'], "percent", source="psutil", metadata={"metric": "disk_usage", "path": "/"})
+        
+        logging.info(f"Logged System Stats: CPU {cpu_usage}%, Mem {mem_usage}%, Disk {disk_usage['percent']}%")
+
     except Exception as e:
-        return {"error": f"Reverse geocoding error: {e}"}
+        logging.error(f"Error polling system stats: {e}", exc_info=True)
+
+def poll_weather_data():
+    """Polls external weather data and saves it."""
+    logging.info("Polling weather data...")
+    if not db_manager or not config_manager or not hw_manager:
+        logging.error("Managers not initialized. Skipping poll.")
+        return
+        
+    try:
+        # The location can be hardcoded in config or based on live GPS
+        location_query = config_manager.get('Polling', 'location', fallback=None)
+        
+        # We pass the managers directly to the service function
+        weather_data = weather_services.fetch_all_weather_data(
+            location_query=location_query,
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+
+        if weather_data and "error" not in weather_data:
+            # Save the full aggregated response as a JSON string
+            db_manager.add_data(
+                data_type="weather_forecast",
+                value=None, # The main value is the JSON blob in metadata
+                source="weather_services",
+                metadata=weather_data
+            )
+            logging.info("Successfully polled and stored weather data.")
+        else:
+            logging.error(f"Failed to poll weather data: {weather_data.get('error', 'Unknown reason')}")
+            
+    except Exception as e:
+        logging.error(f"Error polling weather data: {e}", exc_info=True)
+
+def poll_gnss_data():
+    """Polls internal GNSS data and saves it."""
+    logging.info("Polling GNSS data...")
+    if not db_manager or not hw_manager:
+        logging.error("Managers not initialized. Skipping poll.")
+        return
+        
+    try:
+        # Call the hardware manager directly for the latest data
+        gps_data = hw_manager.get_best_gnss_data()
+
+        if gps_data and "error" not in gps_data and gps_data.get('latitude') is not None:
+             # Save the location data to the location-specific table
+            db_manager.execute_query(
+                "INSERT INTO location_data (latitude, longitude, altitude, source, metadata) VALUES (?, ?, ?, ?, ?)",
+                (
+                    gps_data.get('latitude'),
+                    gps_data.get('longitude'),
+                    gps_data.get('altitude_m'),
+                    gps_data.get('source', 'Onboard GNSS'),
+                    json.dumps(gps_data)
+                )
+            )
+            logging.info(f"Successfully polled and stored GNSS data: Lat {gps_data['latitude']}, Lon {gps_data['longitude']}")
+        else:
+            logging.warning(f"Could not poll valid GNSS data: {gps_data.get('error', 'No fix')}")
+
+    except Exception as e:
+        logging.error(f"Error polling GNSS data: {e}", exc_info=True)
+
+
+# --- Main Execution ---
+def main():
+    """
+    The main function that initializes managers and starts the scheduler loop.
+    """
+    global db_manager, config_manager, hw_manager
+
+    logging.info(f"--- Starting Data Poller Service v{__version__} ---")
+
+    try:
+        # Initialize managers needed for polling tasks
+        db_path = os.environ.get('DB_PATH', '/var/lib/pi_backend/pi_backend.db')
+        db_manager = DatabaseManager(database_path=db_path)
+        config_manager = DBConfigManager(db_manager=db_manager)
+        hw_manager = HardwareManager(app_config=config_manager)
+        
+        # Inject hardware manager into services that need it
+        location_services.set_hardware_manager(hw_manager)
+
+        logging.info("Managers initialized successfully.")
+    except Exception as e:
+        logging.critical(f"CRITICAL: Failed to initialize managers. Poller cannot start. Error: {e}", exc_info=True)
+        sys.exit(1)
+
+    # --- Schedule Jobs ---
+    # Read intervals from the database-backed configuration
+    try:
+        schedule.every(config_manager.getint("Polling", "system_stats_seconds", 60)).seconds.do(poll_system_stats)
+        schedule.every(config_manager.getint("Polling", "weather_minutes", 15)).minutes.do(poll_weather_data)
+        schedule.every(config_manager.getint("Polling", "gps_seconds", 10)).seconds.do(poll_gnss_data)
+        
+        logging.info("Polling jobs scheduled:")
+        for job in schedule.get_jobs():
+            logging.info(f"  -> {job}")
+
+    except Exception as e:
+        logging.critical(f"CRITICAL: Could not schedule jobs. Error: {e}", exc_info=True)
+        sys.exit(1)
+
+    # --- Run Scheduler Loop ---
+    logging.info("Starting scheduler loop. Poller is now active.")
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(1)
+        except KeyboardInterrupt:
+            logging.info("Keyboard interrupt received. Shutting down poller.")
+            break
+        except Exception as e:
+            logging.error(f"An unexpected error occurred in the scheduler loop: {e}", exc_info=True)
+            # Sleep longer on error to prevent rapid-fire failures
+            time.sleep(60)
+
+if __name__ == "__main__":
+    main()

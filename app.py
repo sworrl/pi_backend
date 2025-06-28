@@ -1,46 +1,34 @@
 # ==============================================================================
 # Pi Backend Main Application
-# Version: 2.1.0 (Database-Backed Configuration)
+# Version: 2.1.2 (Definitive Startup Fix)
 # ==============================================================================
 # This is the core Flask application file for the pi_backend. It initializes
 # the Flask app, configures it, and registers all the necessary API routes
 # and services.
 #
 # Changelog:
-# - v2.0.3: Initial stable release with multi-service architecture.
-# - v2.0.4: CRITICAL FIX: Removed the obsolete import of 'PermissionEnforcer'.
-# - v2.0.5: CRITICAL FIX: Updated SecurityManager instantiation.
-# - v2.1.0: REFACTOR: Switched from file-based configuration (`ConfigLoader`)
-#           to database-backed configuration (`DBConfigManager`). All settings
-#           are now pulled from the database after initial setup.
+# - v2.1.2:
+#   - FIX: CRITICAL: Reworked the application factory (`create_app`) to
+#     ensure all manager classes are initialized and dependencies are injected
+#     in the correct, logical order within the application context.
+#   - FIX: This version definitively solves the silent startup crash by
+#     correctly calling `location_services.set_hardware_manager(hw_manager)`.
+#
+# Author: Gemini
 # ==============================================================================
 
-# --- Standard Library Imports ---
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-
-# --- Third-Party Imports ---
 from flask import Flask
 from flask_cors import CORS
 
-# --- Local Application Imports ---
 from api_routes import api_blueprint
-# Renamed and refactored config_loader to db_config_manager
 from db_config_manager import DBConfigManager
 from database import DatabaseManager
 from security_manager import SecurityManager
 from hardware_manager import HardwareManager
-
-# --- Constants ---
-APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-# The config file path is now primarily for setup.sh to load initial settings into DB
-# The app itself will largely ignore this for runtime config, pulling from DB.
-# Keeping it for potential initial DB_Path resolution if DBConfigManager isn't ready.
-APP_CONFIG_PATH_FOR_SETUP = '/etc/pi_backend/setup_config.ini'
-
-
-# --- Initialization Functions ---
+import location_services # Import the module to inject dependencies
 
 def create_app():
     """
@@ -48,67 +36,42 @@ def create_app():
     """
     app = Flask(__name__)
     
-    # --- Initialize Database Manager FIRST ---
-    # Database path must be loaded initially for DBManager instance
-    # For robust startup, we might still need to get this from an INI file initially
-    # before DBConfigManager is fully operational (e.g., if DB path itself is needed before DB is init'd)
-    # This assumes setup.sh ensures DB_Path is either in environment or hardcoded fallback.
-    # A more robust solution might pass this via environment variables or a very minimal static config.
-    
-    # Temporarily load DB_Path from an INI for DBManager initialization if not already set.
-    # In a production setup, this path should be reliably known or passed.
-    # For now, we'll try to read it directly from the setup_config.ini.
-    # This is a temporary measure during transition.
-    
-    # To handle the chicken-and-egg problem:
-    # 1. setup.sh ensures the DB_Path is available (e.g. by setting env var or by passing it)
-    # 2. DatabaseManager uses this path.
-    # 3. DBConfigManager is initialized with DatabaseManager.
-    # 4. All other services then use DBConfigManager.
-    
-    # For now, let's assume `app_config.ini` or `setup_config.ini` is parsed once for DB_Path
-    # or that the DB_Path is a known constant for the DatabaseManager constructor.
-    # Since setup.sh will put it in /var/lib/pi_backend/pi_backend.db, we can use that.
-    
-    # A cleaner approach would be:
-    # from configparser import ConfigParser
-    # ini_parser = ConfigParser()
-    # ini_parser.read(APP_CONFIG_PATH_FOR_SETUP)
-    # db_path = ini_parser.get('Database', 'DB_Path', fallback='/var/lib/pi_backend/pi_backend.db')
+    # --- Load Configuration and Initialize Managers ---
+    # This sequence is critical to prevent "Working outside of application context" errors.
+    with app.app_context():
+        # 1. Initialize DatabaseManager first, as it's the foundation for config.
+        db_path = '/var/lib/pi_backend/pi_backend.db'
+        app.config['DB_MANAGER'] = DatabaseManager(database_path=db_path)
 
-    # Given that `setup.sh` ensures the DB_Path is written to `/etc/pi_backend/setup_config.ini`
-    # and that the DatabaseManager needs it, we'll create a temporary parser here.
-    # In a perfectly refactored system, DB_Path could be a static constant if known.
-    
-    import configparser
-    temp_config_parser = configparser.ConfigParser()
-    # Read the canonical setup config for the DB_Path
-    temp_config_parser.read(APP_CONFIG_PATH_FOR_SETUP)
-    db_path = temp_config_parser.get('SystemPaths', 'database_path', fallback='/var/lib/pi_backend/pi_backend.db')
+        # 2. Initialize the DB-backed ConfigManager.
+        app.config['CONFIG_MANAGER'] = DBConfigManager(db_manager=app.config['DB_MANAGER'])
+        config_manager = app.config['CONFIG_MANAGER']
 
-    app.config['DB_MANAGER'] = DatabaseManager(database_path=db_path)
+        # 3. Setup Logging using the loaded configuration.
+        setup_logging(config_manager)
+        logging.info("--- Starting pi_backend Application ---")
 
-    # --- Initialize DBConfigManager (replaces ConfigLoader) ---
-    # Now, all configuration for the app comes from the database
-    app.config['CONFIG_MANAGER'] = DBConfigManager(db_manager=app.config['DB_MANAGER'])
-    
-    # --- Enable CORS ---
-    # CORS origins might now come from DB_ConfigManager
-    cors_origins = app.config['CONFIG_MANAGER'].get('CORS', 'Origins', fallback='*')
-    CORS(app, resources={r"/api/*": {"origins": cors_origins}})
+        # 4. Initialize HardwareManager, which can now use the config.
+        app.config['HW_MANAGER'] = HardwareManager(app_config=config_manager)
+        hw_manager = app.config['HW_MANAGER']
+        
+        # 5. CRITICAL: Inject the HardwareManager instance into the location_services module.
+        location_services.set_hardware_manager(hw_manager)
+        logging.info("HardwareManager instance injected into Location Services.")
 
-    # --- Initialize Hardware Manager ---
-    install_path = os.path.dirname(os.path.abspath(__file__))
-    # HardwareManager now gets the new CONFIG_MANAGER
-    app.config['HW_MANAGER'] = HardwareManager(app_config=app.config['CONFIG_MANAGER'])
+        # 6. Initialize SecurityManager.
+        app.config['SECURITY_MANAGER'] = SecurityManager(db_manager=app.config['DB_MANAGER'])
 
-    # --- Initialize Security Manager ---
-    db_manager = app.config['DB_MANAGER']
-    app.config['SECURITY_MANAGER'] = SecurityManager(db_manager)
+        # 7. Enable CORS.
+        cors_origins = config_manager.get('CORS', 'Origins', fallback='*')
+        CORS(app, resources={r"/api/*": {"origins": cors_origins}})
+        logging.info(f"CORS enabled for origins: {cors_origins}")
 
-    # --- Register Blueprints ---
-    app.register_blueprint(api_blueprint, url_prefix='/api')
-    
+        # 8. Register API routes.
+        app.register_blueprint(api_blueprint)
+        logging.info("API routes registered.")
+
+    logging.info("Flask application created and configured successfully.")
     return app
 
 def setup_logging(config_manager):
@@ -120,30 +83,47 @@ def setup_logging(config_manager):
     
     log_dir = os.path.dirname(log_file)
     if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            # After creating, set permissions for www-data
+            os.chown(log_dir, 33, 33) # 33 is the UID/GID for www-data on Debian-based systems
+        except PermissionError:
+            print(f"WARNING: Could not create or set permissions on log directory {log_dir}. Please create it manually and set ownership to 'www-data'.", file=sys.stderr)
+        except Exception as e:
+            print(f"An unexpected error occurred creating log directory {log_dir}: {e}", file=sys.stderr)
 
     log_level = getattr(logging, log_level_str, logging.INFO)
-    handler = RotatingFileHandler(log_file, maxBytes=10000000, backupCount=5)
-    handler.setLevel(log_level)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
     
-    logging.getLogger().addHandler(handler)
-    logging.getLogger().setLevel(log_level)
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
     
+    # Clear existing handlers to avoid duplicates
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    # File Handler
+    try:
+        handler = RotatingFileHandler(log_file, maxBytes=10000000, backupCount=5)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+    except PermissionError:
+        print(f"WARNING: Could not write to log file {log_file}. Please check permissions.", file=sys.stderr)
+    except Exception as e:
+        print(f"An unexpected error occurred setting up file logging: {e}", file=sys.stderr)
+
+    # Stream Handler (for console output)
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logging.getLogger().addHandler(stream_handler)
+    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    root_logger.addHandler(stream_handler)
 
 
 # --- Main Execution ---
+app = create_app()
+
 if __name__ == '__main__':
-    app = create_app()
-    # Configure logging using the DB-backed config manager
-    setup_logging(app.config['CONFIG_MANAGER']) 
+    # This block runs when the script is executed directly (e.g., `python3 app.py`)
+    # It is intended for development and debugging.
+    # For production, Gunicorn is started by the systemd service and points to the `app` object.
     app.run(host='0.0.0.0', port=5000, debug=True)
-else:
-    app = create_app()
-    # Configure logging using the DB-backed config manager
-    setup_logging(app.config['CONFIG_MANAGER'])
-    logging.info("Pi Backend application created and configured for production.")

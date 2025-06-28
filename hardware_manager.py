@@ -1,22 +1,18 @@
 #
 # File: hardware_manager.py
-# Version: 2.2.0 (Corrected GPS Pipe and Altitude Parsing)
+# Version: 2.3.0 (Resilient Module Loading)
 #
 # Description: This module acts as a central abstraction layer for hardware.
 #
+# Changelog (v2.3.0):
+# - FIX: Implemented a more robust `_load_module_by_path` function. It now
+#   wraps the entire module initialization in a try-except block. This ensures
+#   that if a hardware module's __init__ fails (e.g., due to a serial port
+#   conflict), it logs the error but does NOT crash the main application.
+#
 # Changelog (v2.2.0):
-# - CRITICAL FIX: The GPS reader thread now correctly uses `gpspipe -w` instead
-#   of `cgps -s`. The `-s` flag was silencing the required JSON stream. `gpspipe`
-#   is the correct tool for streaming raw JSON from gpsd.
-# - ROBUSTNESS: Updated `get_best_gnss_data` to check for `altHAE`, `altMSL`,
-#   and `alt` keys for altitude to support different gpsd versions.
-#
-# Changelog (v2.1.1):
-# - FEATURE: Added the `get_raw_gps_cache` method to expose the internal
-#   GPS data dictionary for the new debugging API endpoint.
-#
-# Changelog (v2.1.0):
-# - FIX: Restored all missing LTE and Sense HAT control functions.
+# - CRITICAL FIX: Corrected GPS pipe to use `gpspipe -w`.
+# - ROBUSTNESS: Updated altitude parsing for gpsd.
 #
 import sys
 import os
@@ -27,7 +23,7 @@ import threading
 import json
 import time
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 # Configure logging for this module
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -85,7 +81,7 @@ class HardwareManager:
         process = None
         while not self._stop_gps_thread.is_set():
             try:
-                # CORRECTED: Use 'gpspipe -w' for a clean JSON stream of TPV and SKY reports.
+                # Use 'gpspipe -w' for a clean JSON stream of TPV and SKY reports.
                 process = subprocess.Popen(['gpspipe', '-w'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
                 for line in iter(process.stdout.readline, ''):
                     if self._stop_gps_thread.is_set():
@@ -104,12 +100,10 @@ class HardwareManager:
                 if self._stop_gps_thread.is_set():
                     break
 
-                # Updated warning message for clarity
                 logging.warning("GPS Reader Thread: `gpspipe -w` stream ended. Restarting in 5s.")
                 time.sleep(5)
 
             except FileNotFoundError:
-                # Updated critical error message
                 logging.critical("GPS Reader Thread: `gpspipe` command not found. GPS streaming is disabled. Please ensure 'gpsd-clients' is installed.")
                 return
             except Exception as e:
@@ -120,19 +114,33 @@ class HardwareManager:
                     process.kill()
 
     def _load_module_by_path(self, module_name, class_name, friendly_name, file_path):
-        """Dynamically loads a module from a file path."""
+        """Dynamically loads a module from a file path with robust error handling."""
         try:
             if not os.path.exists(file_path):
                 logging.warning(f"HardwareManager: Module file '{file_path}' not found. {friendly_name} unavailable.")
                 return
+
+            # This entire block is wrapped to catch any error during import or instantiation.
             spec = importlib.util.spec_from_file_location(module_name, file_path)
+            if spec is None:
+                logging.error(f"Could not create module spec for {friendly_name} at {file_path}")
+                return
+                
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             manager_class = getattr(module, class_name)
+            
+            # This is the critical point that can fail if __init__ has an error
             self._loaded_modules[friendly_name] = manager_class()
+            
             logging.info(f"HardwareManager: Successfully loaded and initialized {friendly_name}.")
         except Exception as e:
-            logging.error(f"HardwareManager: Failed to load {friendly_name} from {file_path}: {e}", exc_info=True)
+            # Catch ANY exception during the above process
+            logging.error(f"HardwareManager: CRITICAL FAILURE loading module '{friendly_name}'. The hardware will be disabled. Error: {e}", exc_info=True)
+            # Ensure the module is not listed as loaded
+            if friendly_name in self._loaded_modules:
+                del self._loaded_modules[friendly_name]
+
 
     def get_manager(self, friendly_name):
         return self._loaded_modules.get(friendly_name)
@@ -150,7 +158,6 @@ class HardwareManager:
         fix_mode = tpv_data.get('mode', 0)
         fix_type_map = {0: 'No Fix', 1: 'No Fix', 2: '2D Fix', 3: '3D Fix'}
 
-        # CORRECTED: Accommodate different gpsd versions that may use 'alt', 'altMSL', or 'altHAE'
         altitude = tpv_data.get('altHAE')
         if altitude is None:
             altitude = tpv_data.get('altMSL')
@@ -188,7 +195,7 @@ class HardwareManager:
     def get_lte_network_info(self):
         """Gets detailed network information from the LTE modem."""
         lte_manager = self.get_manager("LTE Modem (A7670E)")
-        if not lte_manager: return {"error": "LTE Modem module not loaded."}
+        if not lte_manager: return {"error": "LTE Modem module not loaded or failed to initialize."}
         return {
             "signal_quality": lte_manager.send_at_command("AT+CSQ", "+CSQ:"),
             "network_registration": lte_manager.send_at_command("AT+CREG?", "+CREG:"),
@@ -204,16 +211,6 @@ class HardwareManager:
         if response:
             return {"success": True, "message": f"Flight mode set to {enable}."}
         return {"error": "Failed to set flight mode."}
-
-    def enable_lte_gnss_module(self):
-        """Sends the power-on command to the GNSS module within the LTE modem."""
-        lte_manager = self.get_manager("LTE Modem (A7670E)")
-        if not lte_manager: return {"error": "LTE Modem module not loaded."}
-        # This is a backup/manual command. The primary power-on is handled by the init service.
-        response = lte_manager.send_at_command('AT+CGNSPWR=1', "OK")
-        if response:
-             return {"success": True, "message": "Attempted to enable LTE internal GNSS module."}
-        return {"error": "Failed to send GNSS power-on command."}
 
     # --- Sense HAT Methods ---
     def get_sense_hat_data(self):

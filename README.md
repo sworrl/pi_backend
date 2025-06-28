@@ -1,182 +1,236 @@
-π-Backend: Raspberry Pi Control & Monitoring System
-Overview
-The π-Backend project provides a robust and extensible solution for controlling, monitoring, and managing a Raspberry Pi-based system through a web interface and background services. It integrates various hardware components (like the Sense HAT and A7670E LTE modem with GPS), provides environmental and location services, and offers a comprehensive dashboard for real-time data visualization and administrative tasks.
+pi_backend
+Version: 2.2.0
 
-Key Features
-This version brings significant enhancements to stability, automation, and user interface:
+Project Overview
+This project is a comprehensive Python backend designed to run on a Raspberry Pi. It provides a robust API server built with Flask and includes a persistent background service for periodic data collection. It is designed to be the central API and data-logging service for any number of frontend applications.
 
-Automated Setup and Updates:
+Core Features
+RESTful API Server: Provides endpoints for real-time data and control under the /api/ path.
 
-setup.sh Refactor: The primary setup script (setup.sh) has been extensively refactored for improved reliability and automation.
+Background Data Polling Service: A systemd service that runs on boot, periodically fetches data from the API, and stores it in the local database.
 
-Automatic Updates: Detects new local source files or discrepancies with the GitHub repository and automatically triggers a patch/update process on startup, eliminating the need for manual uninstalls for upgrades.
+Configurable Polling: Polling frequencies for different data points (GNSS, weather, etc.) can be easily changed in a .ini file without touching the code.
 
-Database Protection: The setup process now intelligently manages the SQLite database, ensuring data is preserved during updates and only wiped during explicit uninstall operations.
+Hardware Interfacing: Real-time data and control for the Sense HAT, GNSS (via gpsd or UART), Bluetooth, and LTE Modems (via GPIO and Serial).
 
-Robust A7670E GPS Integration:
+Installer & Updater: A comprehensive setup.sh script automates installation, updates, and service management.
 
-Dedicated Installer Tool: Integrates your specialized setup_a7670e_gps.sh tool for precise installation and management of the A7670E GPS initialization script and its systemd service.
+Secure API Key Management: Uses a permission-restricted API.keys file and provides an endpoint (/api/keys) to update keys securely from a frontend UI.
 
-Enhanced Diagnostics: The setup script now captures and displays detailed output from the A7670E GPS installer tool, aiding in troubleshooting its setup.
+The Data Poller Service
+A key feature of this backend is the pi_backend_poller service. This is a Python script that runs continuously in the background and is managed by systemd, ensuring it starts automatically on boot.
 
-Improved Backend Architecture:
+Its purpose is to automatically collect time-series data without requiring a frontend to be active. It calls its own API (e.g., /api/hardware/gps) and stores the JSON response in a dedicated polled_data table in the database, along with a timestamp and data source.
 
-Dependency Injection: Critical Flask application context errors ("Working outside of application context") in weather_services, location_services, app.py, data_poller.py, and api_routes.py have been resolved. Database and configuration managers are now explicitly passed to service functions, ensuring robust operation in all contexts.
+Configuring the Poller
+You can change how often data is collected by editing the configuration file.
 
-New API Endpoint: A /api/system/file-info endpoint has been added, dynamically providing version numbers and SHA256 checksums of installed backend files for integrity checks.
+Example using the default path:
+sudo nano /var/www/pi_backend/poller_config.ini
 
-Enhanced Web Dashboard (index.html):
+The file contents are simple:
 
-Specialized Tabs: The dashboard now features highly specialized tabs for clearer organization of information:
+[Frequencies]
 
-Overview: Provides high-level summaries of GPS, Database, and core System Status (CPU, Memory, Disk, Sense HAT temp).
+Polling intervals. Do not use quotes.
+weather_minutes = 10
+climate_days = 7
+gps_seconds = 10
 
-GPS: Dedicated tab for detailed GPS data and an OpenStreetMap display.
+Simply change the numbers and save the file. Then, restart the service for the changes to take effect:
+sudo systemctl restart pi_backend_poller.service
 
-Time: Dedicated tab for Chrony synchronization status, clock performance, and dynamic explanation of Frequency Skew.
+Setup, Updates, and Service Management
+Prerequisites
+A Raspberry Pi running a recent version of Raspberry Pi OS.
 
-Hardware: Detailed Sense HAT sensor readings and LED controls, along with other hardware actions.
+An active internet connection.
 
-Location: Geocoding, Reverse Geocoding, and Community Services (Nearby POIs).
+Step 1: Download and Run the Script
+Get the pi_backend project files onto your Raspberry Pi. Then, run the interactive installer.
 
-Weather: External weather service tests with improved card-based display.
-
-Update: New tab! Displays a table comparing installed file versions and checksums against local source files or the GitHub repository (sworrl/pi_backend/main), indicating if files are OK, OUTDATED, MISSING, NEWER_ON_DEVICE, or FETCH_FAILED. Includes a button to trigger updates from GitHub.
-
-Users: For user account management (admin only).
-
-Admin: For API key management and admin login/logout.
-
-Live Clock: A persistent, live-updating digital clock is now integrated directly into the left sidebar for constant visibility.
-
-Improved UI/UX: Cleaner layout, consistent styling with Tailwind CSS, and better feedback mechanisms (in-page toast messages instead of disruptive alert()).
-
-Installation
-To install and set up the π-Backend system on your Raspberry Pi:
-
-Clone the repository (or transfer files):
-
-git clone https://github.com/sworrl/pi_backend.git
-cd pi_backend
-
-Ensure your setup_a7670e_gps.sh and a7670e-gps-init.sh files are in this directory.
-
-Make setup.sh executable:
-
+cd /path/to/pi_backend-main/
 chmod +x setup.sh
-
-Run the setup script:
-
 ./setup.sh
 
-The script will guide you through the initial setup process. It will automatically detect if it's a first-time installation or if updates are needed.
+The script will present a menu:
 
-First-Time Install: It will install prerequisites, deploy files, configure services, and prompt you to set an initial admin password.
+Install New Backend: For a fresh installation.
 
-Updates: It will automatically detect outdated files by comparing them against your local source, prompt you for confirmation, and then apply the updates and restart necessary services.
+Update Existing Backend: Updates the application files while preserving your data and keys.
 
-Configure Raspberry Pi Serial Port (if using A7670E HAT):
+Install/Update Data Poller Service: Use this after an initial install or update to set up the background service.
 
-Run sudo raspi-config.
+Quit
 
-Go to 3 Interface Options.
+Step 2: CRITICAL - Configure API Keys
+After installation, you must edit the API.keys file.
 
-Select P6 Serial Port.
+sudo nano /var/www/pi_backend/API.keys
 
-For "Would you like a login shell to be accessible over serial?", select NO.
+Fill in the values for "YOUR_KEY_HERE". The GEMINI_API_KEY can also be set from a frontend UI.
 
-For "Would you like the serial port hardware to be enabled?", select YES.
+Running the Backend Server
+For testing, you can run the app manually. For production, you should run it as a systemd service.
 
-Reboot your Raspberry Pi for changes to take effect: sudo reboot.
+Navigate to your installation directory
+cd /var/www/pi_backend/
+python3 app.py
 
-Usage
-After successful installation, the web dashboard should be accessible via your Raspberry Pi's IP address or configured domain.
+API Endpoint Guide
+All API calls should be made to relative paths starting with /api/.
 
-Accessing the Dashboard:
+Status and Configuration
+Method
 
-Open a web browser and navigate to http://<YOUR_PI_IP_ADDRESS>/ or https://<YOUR_DOMAIN_NAME>/.
+Endpoint
 
-Initial Admin Setup: If it's a first-time run, you'll be prompted to set an initial admin password. Use admin as the default username.
+Request Body
 
-Dashboard Navigation: Use the tabs at the top of the main content area to navigate through different sections:
+Description
 
-Overview: Quick summaries of system status.
+GET
 
-GPS: Detailed GPS fixes and map display.
+/api/version
 
-Time: Chrony synchronization details and clock performance.
+(none)
 
-Hardware: Sense HAT sensor data and LED controls, Bluetooth scan, LTE modem info.
+Returns the version of the running backend, e.g., {"version": "2.2.0"}.
 
-Location: Geocoding and reverse geocoding tests, community POI searches.
+GET
 
-Weather: Test external weather API integrations.
+/api/status
 
-Update: Crucial for maintenance. Compare installed files against local or GitHub versions and initiate updates.
+(none)
 
-Users: Manage backend user accounts (Admin only).
+A simple, lightweight endpoint to check if the API is running.
 
-Admin: Manage API keys for external services and admin login/logout.
+POST
 
-Left Sidebar: Provides persistent system status metrics and the live digital clock.
+/api/keys
 
-API Endpoints
-The backend exposes a RESTful API. Here are some key endpoints:
+{ "key_name": "GEMINI_API_KEY", "key_value": "AIzaSy..." }
 
-/api/status: Get overall API status and backend version.
+Securely saves or updates an API key in the API.keys file.
 
-/api/hardware/system-stats: Get CPU, memory, disk usage.
+Hardware, GNSS & LTE Control
+Method
 
-/api/hardware/sensehat/data: Get Sense HAT sensor readings.
+Endpoint
 
-/api/hardware/gps/best: Get the best available GPS fix.
+Request Body / Params
 
-/api/services/location-test?location=<query>: Geocode a location string.
+Description
 
-/api/services/weather-test?location=<query>: Get weather data.
+GET
 
-/api/system/file-info?mode=[local|github]: (Admin only) Get details about installed files.
+/api/hardware/cpu
 
-/api/system/update-files: (Admin only) Trigger a backend file update.
+(none)
 
-/api/users: Manage user accounts (Admin only).
+Gets current CPU usage percentage.
 
-/api/keys: Manage API keys (Admin only).
+GET
 
-Refer to the api_routes.py file for a comprehensive list of all available endpoints.
+/api/hardware/memory
 
-Troubleshooting
-setup.sh issues:
+(none)
 
-Ensure setup.sh is executable (chmod +x setup.sh).
+Gets current memory usage percentage.
 
-Run sudo apt update && sudo apt upgrade -y first to ensure system packages are up-to-date.
+GET
 
-If encountering Exec format error for .sh scripts, verify file permissions (chmod +x <script_name>) and line endings (convert to Unix/LF using dos2unix <script_name>).
+/api/hardware/sensehat
 
-If apt updates fail, check network connectivity.
+(none)
 
-Service Failures (502, 503 errors from API test):
+Gets sensor data from the Sense HAT.
 
-Check backend service logs: sudo journalctl -u pi_backend_api.service --no-pager -f
+GET
 
-Check web server logs (Apache): sudo tail -f /var/log/apache2/error.log
+/api/hardware/gps
 
-Ensure all Python dependencies are installed.
+(none)
 
-GPS/Chrony issues:
+Gets GNSS data from the gpsd service (now handled by gnss_services.py).
 
-Check GPSD service status: sudo systemctl status gpsd.service
+GET
 
-Check Chrony status: chronyc sources and chronyc clients
+/api/hardware/gps/uart
 
-Verify serial port configuration in sudo raspi-config.
+(none)
 
-Check the A7670E GPS installer tool's specific logs: sudo journalctl -u a7670e-gps-init.service --no-pager -f.
+Gets raw NMEA GNSS data directly from the default serial port (now handled by gnss_services.py).
 
-Changelog Summary
-v21.8.x Series: Introduced robust setup.sh automatic updates and GitHub comparison. Overhauled index.html dashboard for specialized tabs and live clock. Enhanced API debugging.
+GET
 
-v21.7.x Series: Refined setup.sh auto-update logic, protected database from accidental wipes, improved file version comparison diagnostics, and introduced the external A7670E GPS installer tool. Initial fixes for "Working outside of application context" errors and ModuleNotFoundError in Python services.
+/api/hardware/gps/status
 
-v21.6.x Series: Initial database-backed configuration, systemd service management, prerequisite verification, and basic API setup.
+(none)
+
+Checks if the gpsd service is running (now handled by gnss_services.py).
+
+GET
+
+/api/hardware/lte/status
+
+?port=/dev/ttyUSB2 (optional)
+
+Gets status, signal strength, and operator from a connected LTE modem.
+
+POST
+
+/api/hardware/lte/power-cycle
+
+(none)
+
+Toggles the LTE modem power by pulsing the GPIO power key.
+
+POST
+
+/api/hardware/lte/flight-mode
+
+{ "enable": true } or { "enable": false }
+
+Enables or disables the modem's flight mode via GPIO.
+
+External Data & Database
+Method
+
+Endpoint
+
+Query Parameters (Example)
+
+Description
+
+GET
+
+/api/location-data
+
+?location=Tokyo&modules=forecast
+
+Resolves a location and fetches Open-Meteo data. Can use GNSS if no location is provided.
+
+GET
+
+/api/weather-data
+
+?location=London,UK&services=openweather
+
+Fetches aggregated weather data from various APIs.
+
+POST
+
+/api/data
+
+{ "data": "your_string_here" }
+
+Saves a generic string to the database.
+
+GET
+
+/api/data
+
+(none)
+
+Retrieves all saved data entries.

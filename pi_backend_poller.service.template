@@ -1,0 +1,18 @@
+[Unit]
+Description=Pi Backend Data Poller Service
+# Make sure the API is running before the poller tries to use it
+After=__API_SERVICE_NAME__
+Wants=__API_SERVICE_NAME__
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=__INSTALL_PATH__
+# Use the python3 executable from /usr/bin to run the data_poller.py script
+ExecStart=/usr/bin/python3 __INSTALL_PATH__/data_poller.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

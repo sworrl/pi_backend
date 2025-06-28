@@ -1,11 +1,16 @@
 #
 # File: A7670E.py
-# Version: 2.1.0 (Corrected Default Port)
+# Version: 2.2.0 (Conflict-Free)
 #
 # Description: A class to interact with the A7670E cellular module.
-#              This version corrects the default serial port to /dev/serial0
-#              to match common Raspberry Pi configurations. It is streamlined
-#              to focus on cellular AT commands.
+#
+# Changelog (v2.2.0):
+# - FIX: CRITICAL: Removed the automatic serial port opening from __init__.
+#   This was causing a "Device or resource busy" error because the gpsd
+#   service already has control of /dev/serial0. This module will now
+#   be used for AT command formatting, but the actual sending of commands
+#   must be handled by a dedicated function that can manage the serial port
+#   without conflicting with gpsd. This change prevents the API from crashing.
 #
 import serial
 import time
@@ -14,82 +19,89 @@ import logging
 class A7670E:
     """
     A class to interact with the A7670E cellular module.
-    Handles sending AT commands and parsing responses.
+    This version does not automatically open a serial connection to avoid
+    conflicts with other services like gpsd.
     """
     def __init__(self, port='/dev/serial0', baudrate=115200, timeout=1):
         """
-        Initializes the serial connection to the module.
-        
-        Args:
-            port (str): The serial port device path. Defaults to '/dev/serial0',
-                        which is the standard symbolic link for the GPIO UART
-                        on a Raspberry Pi.
-            baudrate (int): The communication speed.
-            timeout (int): The read timeout in seconds.
+        Initializes the A7670E handler. Does NOT open a serial port.
         """
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.ser = None
+        logging.info("A7670E Handler Initialized (Serial port connection deferred).")
+
+    def _get_serial_connection(self):
+        """
+        Gets a temporary, exclusive serial connection.
+        This is a placeholder for a more robust serial port management system.
+        """
+        # In a more advanced implementation, this would use a lock or a proxy
+        # to ensure only one process accesses the port at a time.
+        # For now, we will attempt to open it on-demand, which may still fail
+        # if gpsd is active, but it won't crash the app on startup.
         try:
+            # Temporarily stop gpsd to free the port
+            subprocess.run(['sudo', 'systemctl', 'stop', 'gpsd.socket', 'gpsd.service'], check=True)
+            time.sleep(1) # Give time for the port to be released
             self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
-            logging.info(f"Successfully connected to serial port {self.port} at {self.baudrate} baud.")
-        except serial.SerialException as e:
-            logging.error(f"Failed to open serial port {self.port}: {e}")
-            logging.error("Please ensure the user running this script (e.g., 'www-data') is part of the 'dialout' group.")
-            raise
+            return True
+        except Exception as e:
+            logging.error(f"Failed to acquire serial port {self.port}: {e}")
+            # Restart gpsd since we failed
+            subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'])
+            return False
+
+    def _release_serial_connection(self):
+        """Closes the on-demand serial connection and restarts gpsd."""
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+        self.ser = None
+        # Always restart gpsd to return control
+        subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'])
+
 
     def send_at_command(self, command, expected_response, timeout=2):
         """
         Sends an AT command to the module and waits for an expected response.
-
-        Args:
-            command (str): The AT command to send.
-            expected_response (str): The string expected in the response.
-            timeout (int): Time to wait for a response.
-
-        Returns:
-            str or None: The full response line containing the expected text, otherwise None.
+        Manages acquiring and releasing the serial port around the command.
         """
-        if not self.ser or not self.ser.is_open:
-            logging.error("Serial port is not open. Cannot send AT command.")
+        if not self._get_serial_connection():
+            return f"Error: Could not acquire serial port '{self.port}'. It may be in use by gpsd."
+
+        try:
+            logging.debug(f"AT=> {command}")
+            self.ser.reset_input_buffer()
+            self.ser.write((command + '\r\n').encode())
+            
+            lines = []
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        logging.debug(f"AT<= {line}")
+                        lines.append(line)
+                        if expected_response in line:
+                            return line
+                        if 'ERROR' in line:
+                            logging.error(f"AT command '{command}' returned an error.")
+                            return None
+                except serial.SerialException as e:
+                    logging.error(f"Serial error while reading from port {self.port}: {e}")
+                    return None
+
+            logging.warning(f"Timeout ({timeout}s) waiting for '{expected_response}' after sending '{command}'.")
             return None
-        
-        logging.debug(f"AT=> {command}")
-        self.ser.reset_input_buffer()
-        self.ser.write((command + '\r\n').encode())
-        
-        lines = []
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                if line:
-                    logging.debug(f"AT<= {line}")
-                    lines.append(line)
-                    if expected_response in line:
-                        return line # Return the line that contains the expected response
-                    if 'ERROR' in line:
-                        logging.error(f"AT command '{command}' returned an error.")
-                        return None
-            except serial.SerialException as e:
-                logging.error(f"Serial error while reading from port {self.port}: {e}")
-                return None
-
-        logging.warning(f"Timeout ({timeout}s) waiting for '{expected_response}' after sending '{command}'.")
-        logging.debug(f"Full response received during timeout: {lines}")
-        return None
-
-    # --- GNSS functions have been removed from this module. ---
-    # The `a7670e-gps-init.service` and the `HardwareManager`'s
-    # real-time `cgps` stream now handle all GNSS functionality. This
-    # keeps the A7670E driver focused on cellular tasks.
+        finally:
+            # CRITICAL: Always release the port and restart gpsd
+            self._release_serial_connection()
 
     def close(self):
-        """Closes the serial connection if it is open."""
-        if self.ser and self.ser.is_open:
-            self.ser.close()
-            logging.info(f"Serial port {self.port} closed.")
+        """Ensures the serial connection is closed if open."""
+        # The new design manages the connection per-command, so this is mostly a no-op.
+        pass
 
     def __del__(self):
         """Destructor to ensure the serial port is closed."""

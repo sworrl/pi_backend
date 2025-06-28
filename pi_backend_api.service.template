@@ -1,0 +1,16 @@
+[Unit]
+Description=Gunicorn instance to serve the pi_backend Flask application
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=__INSTALL_PATH__
+# Clean up any old socket file before starting to prevent connection errors
+ExecStartPre=/bin/rm -f __INSTALL_PATH__/pi_backend.sock
+ExecStart=/usr/bin/gunicorn --workers 3 --bind unix:__INSTALL_PATH__/pi_backend.sock -m 007 app:app
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
