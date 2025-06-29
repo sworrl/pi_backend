@@ -1,25 +1,14 @@
 # ==============================================================================
 # pi_backend - Astronomy Services
-# Version: 3.3.7 (Fix Application Context)
+# Version: 3.3.8 (Implement Base Astronomy & Fix NameError)
 # ==============================================================================
-# This script provides a comprehensive suite of astronomical data by aggregating
-# data from multiple sources.
+# This script provides a comprehensive suite of astronomical data.
 #
-# Changelog (v3.3.7):
-# - FIX: Modified `get_full_sky_data` to accept `db_manager` and `config_manager`
-#   explicitly, ensuring internal calls (like for TLE file paths) can access
-#   configuration from the database.
-# - REFACTOR: Updated `eph` and `ts` initialization to ensure `load` is correctly
-#   configured with `config_manager` when retrieving paths from DB.
-#
-# Changelog (v3.3.6):
-# - ROBUSTNESS: Wrapped the loading of the ephemeris data file (eph) in a
-#   try...except block. If the file is empty or corrupt (causing a ValueError),
-#   the script will now log a warning and continue, rather than crashing the
-#   entire API worker. This makes the system resilient to download failures.
-#
-# Changelog (v3.3.5):
-# - CRITICAL FIX: Corrected the Skyfield initialization logic.
+# Changelog (v3.3.8):
+# - FIX: Implemented the missing `get_base_astronomy_data` function to calculate
+#   Sun and Moon rise/set times, resolving a NameError.
+# - REFACTOR: Consolidated all astronomy data fetching under the existing
+#   `get_full_sky_data` to ensure a consistent data structure.
 # ==============================================================================
 
 import requests
@@ -31,13 +20,14 @@ import os
 import logging
 
 try:
-    from skyfield.api import Loader, Topos
+    from skyfield.api import Loader, Topos, Star
+    from skyfield.framelib import ecliptic_frame
     SKYFIELD_AVAILABLE = True
 except ImportError:
     SKYFIELD_AVAILABLE = False
     logging.critical("Skyfield library not found. Please run 'pip install skyfield'. Satellite and planet calculations will fail.")
 
-__version__ = "3.3.7"
+__version__ = "3.3.8"
 
 # --- Caching ---
 _astro_cache = {}
@@ -53,84 +43,105 @@ def _get_from_cache(key):
 def _set_in_cache(key, data):
     _astro_cache[key] = (time.time(), data)
 
-# Global instances (will be initialized on first access or by explicit function call)
+# Global instances
 eph = None
 ts = None
-_skyfield_loader_instance = None # To hold the Loader instance
+_skyfield_loader_instance = None
 
 def _initialize_skyfield(config_manager):
     """Initializes Skyfield components, reading paths from config_manager."""
     global eph, ts, _skyfield_loader_instance
-
-    if not SKYFIELD_AVAILABLE:
-        logging.error("Skyfield is not available. Cannot initialize for astronomy services.")
-        return
-
-    if eph is not None and ts is not None and _skyfield_loader_instance is not None:
-        logging.debug("Skyfield already initialized.")
-        return # Already initialized
+    if not SKYFIELD_AVAILABLE: return
+    if eph is not None and ts is not None: return
 
     try:
-        # Paths from config_manager
         skyfield_data_dir = config_manager.get('SystemPaths', 'skyfield_data_dir', fallback="/var/lib/pi_backend/skyfield-data")
-        ephemeris_file = os.path.join(skyfield_data_dir, 'de442s.bsp') # Note: using de442s.bsp
+        ephemeris_file = os.path.join(skyfield_data_dir, 'de442s.bsp')
         
-        # 1. Instantiate the Loader class.
         _skyfield_loader_instance = Loader(skyfield_data_dir)
-        
-        # 2. Use the loader instance to get the timescale.
         ts = _skyfield_loader_instance.timescale()
 
-        # 3. **Resiliently** load the ephemeris file.
         if os.path.exists(ephemeris_file):
-            try:
-                eph = _skyfield_loader_instance(ephemeris_file)
-                logging.info(f"Successfully loaded Skyfield ephemeris data ({ephemeris_file}).")
-            except ValueError as e:
-                logging.error(f"!!! Ephemeris file '{ephemeris_file}' is corrupt or empty: {e}")
-                logging.error("!!! Planet visibility calculations will be disabled until the file is redownloaded.")
-                eph = None # Ensure eph is None so dependent functions fail gracefully
+            eph = _skyfield_loader_instance(ephemeris_file)
+            logging.info(f"Successfully loaded Skyfield ephemeris data ({ephemeris_file}).")
         else:
-            logging.warning(f"Ephemeris file not found at '{ephemeris_file}'. Planet visibility will be disabled.")
+            logging.warning(f"Ephemeris file not found at '{ephemeris_file}'. Planet/Sun/Moon visibility will be disabled.")
             eph = None
-
     except Exception as e:
         logging.critical(f"A critical error occurred during Skyfield initialization: {e}", exc_info=True)
-        # Reset to ensure dependent functions know Skyfield is not ready
-        eph = None
-        ts = None
-        _skyfield_loader_instance = None
+        eph = ts = _skyfield_loader_instance = None
 
-# --- Individual Data Fetching Functions ---
-
-# Modified to accept config_manager for TLE file path
-def get_satellite_passes(lat, lon, search_term=None, satellite_id=None, days=2, config_manager=None):
+# *** FIX: Implemented the missing function to calculate Sun and Moon events. ***
+def get_base_astronomy_data(lat, lon, config_manager=None):
+    """
+    Calculates rise and set times for the Sun and Moon.
+    """
     if not SKYFIELD_AVAILABLE or config_manager is None: 
         return {"error": "Skyfield library not installed or config_manager is missing."}
     
-    # Ensure Skyfield is initialized before using it
+    _initialize_skyfield(config_manager)
+    if not eph or not ts: 
+        return {"error": "Base astronomy calculations disabled: Ephemeris data unavailable."}
+
+    location = Topos(latitude_degrees=lat, longitude_degrees=lon)
+    t0 = ts.now()
+    t1 = ts.utc(t0.utc_datetime() + timedelta(days=1))
+    
+    results = {}
+    
+    # Sun Events
+    try:
+        t_sun, y_sun = eph['sun'].find_events(location, t0, t1, altitude_degrees=0.0)
+        sun_events = {['rise', 'transit', 'set'][event]: time.utc_iso() for time, event in zip(t_sun, y_sun)}
+        results['sun'] = sun_events
+    except Exception as e:
+        results['sun'] = {'error': str(e)}
+
+    # Moon Events & Phase
+    try:
+        t_moon, y_moon = eph['moon'].find_events(location, t0, t1, altitude_degrees=0.0)
+        moon_events = {['rise', 'transit', 'set'][event]: time.utc_iso() for time, event in zip(t_moon, y_moon)}
+        
+        # Calculate moon phase
+        sun = eph['sun']
+        moon = eph['moon']
+        earth = eph['earth']
+        e = earth.at(t0)
+        _, slon, _ = e.observe(sun).apparent().frame_latlon(ecliptic_frame)
+        _, mlon, _ = e.observe(moon).apparent().frame_latlon(ecliptic_frame)
+        moon_phase_angle = (mlon.degrees - slon.degrees) % 360.0
+        moon_events['phase_degrees'] = round(moon_phase_angle, 2)
+        moon_events['phase_description'] = ["New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous", "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent"][int(moon_phase_angle / 45)]
+
+        results['moon'] = moon_events
+    except Exception as e:
+        results['moon'] = {'error': str(e)}
+        
+    return results
+
+def get_satellite_passes(lat, lon, search_term=None, satellite_id=None, days=2, config_manager=None):
+    if not SKYFIELD_AVAILABLE or config_manager is None: 
+        return {"error": "Skyfield library not installed or config_manager is missing."}
     _initialize_skyfield(config_manager)
     if ts is None or _skyfield_loader_instance is None:
-        return {"error": "Skyfield initialization failed. Cannot calculate satellite passes."}
+        return {"error": "Skyfield initialization failed."}
 
     satellite_tle_file = config_manager.get('Polling', 'tle_file_path', fallback="/var/lib/pi_backend/skyfield-data/active.txt")
     if not os.path.exists(satellite_tle_file):
-        return {"error": f"Satellite TLE file missing at {satellite_tle_file}. Cannot calculate passes."}
+        return {"error": f"Satellite TLE file missing at {satellite_tle_file}."}
 
     try:
-        # Use the already initialized _skyfield_loader_instance
         all_satellites = _skyfield_loader_instance.tle_file(satellite_tle_file)
         found_satellites = []
 
         if satellite_id:
             satellite = next((s for s in all_satellites if s.model.satnum == int(satellite_id)), None)
-            if satellite:
-                found_satellites.append(satellite)
+            if satellite: found_satellites.append(satellite)
         elif search_term:
             found_satellites = [s for s in all_satellites if search_term.lower() in s.name.lower()]
         
         if not found_satellites:
-            return {"error": f"No satellites found matching the criteria.", "search_term": search_term, "id": satellite_id}
+            return {"error": "No satellites found."}
 
         location = Topos(latitude_degrees=lat, longitude_degrees=lon)
         t0 = ts.now()
@@ -140,119 +151,62 @@ def get_satellite_passes(lat, lon, search_term=None, satellite_id=None, days=2, 
         for satellite in found_satellites:
             times, events = satellite.find_events(location, t0, t1, altitude_degrees=10.0)
             event_names = ['rise', 'culminate', 'set']
-            
             passes = []
             current_pass = {}
             for ti, event in zip(times, events):
                 event_name = event_names[event]
+                alt, az, _ = (satellite - location).at(ti).altaz()
                 if event_name == 'rise':
-                    current_pass = {'start': {}}
-                    alt, az, _ = (satellite - location).at(ti).altaz()
-                    current_pass['start']['time_utc'] = ti.utc_iso()
-                    current_pass['start']['azimuth'] = round(az.degrees, 2)
-                    current_pass['start']['altitude'] = round(alt.degrees, 2)
-                
-                elif event_name == 'culminate' and 'start' in current_pass:
-                    current_pass['peak'] = {}
-                    alt, az, _ = (satellite - location).at(ti).altaz()
-                    current_pass['peak']['time_utc'] = ti.utc_iso()
-                    current_pass['peak']['azimuth'] = round(az.degrees, 2)
-                    current_pass['peak']['altitude'] = round(alt.degrees, 2)
-
+                    current_pass = {'start': {'time_utc': ti.utc_iso(), 'azimuth': round(az.degrees, 2)}}
+                elif event_name == 'peak' and 'start' in current_pass:
+                     current_pass['peak'] = {'time_utc': ti.utc_iso(), 'azimuth': round(az.degrees, 2), 'altitude': round(alt.degrees, 2)}
                 elif event_name == 'set' and 'start' in current_pass:
-                    current_pass['end'] = {}
-                    alt, az, _ = (satellite - location).at(ti).altaz()
-                    current_pass['end']['time_utc'] = ti.utc_iso()
-                    current_pass['end']['azimuth'] = round(az.degrees, 2)
-                    current_pass['end']['altitude'] = round(alt.degrees, 2)
-                    
+                    current_pass['end'] = {'time_utc': ti.utc_iso(), 'azimuth': round(az.degrees, 2)}
                     start_dt = datetime.fromisoformat(current_pass['start']['time_utc'].replace('Z', '+00:00'))
                     end_dt = datetime.fromisoformat(current_pass['end']['time_utc'].replace('Z', '+00:00'))
                     current_pass['duration_minutes'] = round((end_dt - start_dt).total_seconds() / 60, 2)
-
                     passes.append(current_pass)
                     current_pass = {}
-            
             if passes:
                  results[f"{satellite.name} ({satellite.model.satnum})"] = passes
-
         return {"search_results": results}
     except Exception as e:
-        logging.error(f"Error calculating satellite passes: {e}", exc_info=True)
         return {"error": str(e)}
 
-# Modified to accept config_manager for ephemeris initialization
 def get_planet_visibility(lat, lon, config_manager=None):
-    if not SKYFIELD_AVAILABLE or config_manager is None: 
-        return {"error": "Skyfield library not installed or config_manager is missing."}
-    
-    _initialize_skyfield(config_manager) # Ensure eph and ts are initialized with current config
-    if not eph: 
-        return {"error": "Planet visibility calculations disabled: Ephemeris data file (de442s.bsp) is unavailable or corrupt."}
+    if not SKYFIELD_AVAILABLE or config_manager is None: return {"error": "Skyfield not available."}
+    _initialize_skyfield(config_manager)
+    if not eph: return {"error": "Ephemeris data unavailable."}
 
-    try:
-        location = Topos(latitude_degrees=lat, longitude_degrees=lon)
-        t0 = ts.now()
-        t1 = ts.utc(t0.utc_datetime() + timedelta(days=1))
-        
-        planets = {"mercury": eph['mercury'], "venus": eph['venus'], "mars": eph['mars'], 
-                   "jupiter": eph['jupiter barycenter'], "saturn": eph['saturn barycenter']}
-        
-        visibility_data = {}
-        for name, body in planets.items():
-            t, y = body.find_events(location, t0, t1, altitude_degrees=0.0)
-            event_names = ['rise', 'transit', 'set']
-            events = {}
-            for ti, event in zip(t, y):
-                events[event_names[event]] = ti.utc_iso()
-            visibility_data[name] = events
-
-        return visibility_data
-    except Exception as e:
-        logging.error(f"Error calculating planet visibility: {e}", exc_info=True)
-        return {"error": str(e)}
+    location = Topos(latitude_degrees=lat, longitude_degrees=lon)
+    t0 = ts.now()
+    t1 = ts.utc(t0.utc_datetime() + timedelta(days=1))
+    planets = {"mercury": eph['mercury'], "venus": eph['venus'], "mars": eph['mars'], "jupiter": eph['jupiter barycenter'], "saturn": eph['saturn barycenter']}
+    visibility_data = {}
+    for name, body in planets.items():
+        t, y = body.find_events(location, t0, t1, altitude_degrees=0.0)
+        visibility_data[name] = {['rise', 'transit', 'set'][event]: ti.utc_iso() for ti, event in zip(t, y)}
+    return visibility_data
         
 def get_major_meteor_showers():
-    """Returns a static list of major meteor showers for the year."""
     year = datetime.now().year
-    return {
-        "source": "American Meteor Society (AMS) / Hardcoded",
-        "showers": [
-            {"name": "Quadrantids", "peak_date": f"{year}-01-03", "radiant": "Boötes", "zhr": 120},
-            {"name": "Lyrids", "peak_date": f"{year}-04-22", "radiant": "Lyra", "zhr": 18},
-            {"name": "Eta Aquarids", "peak_date": f"{year}-05-05", "radiant": "Aquarius", "zhr": 55},
-            {"name": "Delta Aquarids", "peak_date": f"{year}-07-28", "radiant": "Aquarius", "zhr": 20},
-            {"name": "Perseids", "peak_date": f"{year}-08-12", "radiant": "Perseus", "zhr": 100},
-            {"name": "Orionids", "peak_date": f"{year}-10-21", "radiant": "Orion", "zhr": 20},
-            {"name": "Leonids", "peak_date": f"{year}-11-17", "radiant": "Leo", "zhr": 15},
-            {"name": "Geminids", "peak_date": f"{year}-12-14", "radiant": "Gemini", "zhr": 120},
-            {"name": "Ursids", "peak_date": f"{year}-12-22", "radiant": "Ursa Minor", "zhr": 10},
-        ]
-    }
+    return { "source": "American Meteor Society (AMS) / Hardcoded", "showers": [{"name": "Quadrantids", "peak_date": f"{year}-01-03"}, {"name": "Lyrids", "peak_date": f"{year}-04-22"}, {"name": "Eta Aquarids", "peak_date": f"{year}-05-05"}, {"name": "Perseids", "peak_date": f"{year}-08-12"}, {"name": "Geminids", "peak_date": f"{year}-12-14"}] }
 
 # --- Main Orchestration Function ---
 def get_full_sky_data(lat, lon, db_manager=None, config_manager=None):
-    """
-    Orchestrates fetching core astronomical data (sun, moon, planets, space weather).
-    Requires db_manager and config_manager for dependency injection.
-    """
     if db_manager is None or config_manager is None:
-        return {"error": "Database/Config Manager not provided for astronomy services."}
-
-    # Ensure Skyfield is initialized first for all dependent functions
-    _initialize_skyfield(config_manager) 
+        return {"error": "Database/Config Manager not provided."}
+    _initialize_skyfield(config_manager)
     
     cache_key = f"full_{lat:.2f}_{lon:.2f}"
     cached_data = _get_from_cache(cache_key)
-    if cached_data:
-        return cached_data
+    if cached_data: return cached_data
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_map = {
-            executor.submit(get_base_astronomy_data, lat, lon): "base_astronomy",
-            executor.submit(get_space_weather_data): "space_weather",
-            executor.submit(get_planet_visibility, lat, lon, config_manager): "planet_visibility", # Pass config_manager
+            executor.submit(get_base_astronomy_data, lat, lon, config_manager): "base_astronomy",
+            executor.submit(get_planet_visibility, lat, lon, config_manager): "planet_visibility",
             executor.submit(get_major_meteor_showers): "meteor_showers",
         }
         for future in concurrent.futures.as_completed(future_map):

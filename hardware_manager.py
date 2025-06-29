@@ -1,18 +1,14 @@
 #
 # File: hardware_manager.py
-# Version: 2.3.0 (Resilient Module Loading)
+# Version: 2.4.0 (Waveshare UPS HAT Integration)
 #
 # Description: This module acts as a central abstraction layer for hardware.
 #
-# Changelog (v2.3.0):
-# - FIX: Implemented a more robust `_load_module_by_path` function. It now
-#   wraps the entire module initialization in a try-except block. This ensures
-#   that if a hardware module's __init__ fails (e.g., due to a serial port
-#   conflict), it logs the error but does NOT crash the main application.
-#
-# Changelog (v2.2.0):
-# - CRITICAL FIX: Corrected GPS pipe to use `gpspipe -w`.
-# - ROBUSTNESS: Updated altitude parsing for gpsd.
+# Changelog (v2.4.0):
+# - FEAT: Added full integration for Waveshare UPS HAT (INA219).
+#   - It now loads the 'ina219.py' module on initialization.
+#   - Added a `get_ups_data` method to read and return UPS voltage and current.
+#   - Note: Requires 'python3-smbus' and i2c group permissions.
 #
 import sys
 import os
@@ -23,7 +19,7 @@ import threading
 import json
 import time
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 # Configure logging for this module
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -66,8 +62,11 @@ class HardwareManager:
         if MODULES_DIR not in sys.path:
             sys.path.insert(0, MODULES_DIR)
 
+        # Load all hardware modules
         self._load_module_by_path("A7670E", "A7670E", "LTE Modem (A7670E)", os.path.join(MODULES_DIR, 'A7670E.py'))
         self._load_module_by_path("sense_hat", "SenseHatManager", "Sense HAT", os.path.join(MODULES_DIR, 'sense_hat.py'))
+        self._load_module_by_path("ina219", "INA219", "Waveshare UPS HAT", os.path.join(MODULES_DIR, 'ina219.py'))
+
 
         self._gps_thread.start()
         logging.info("HardwareManager: Real-time GPS streaming thread started.")
@@ -120,7 +119,6 @@ class HardwareManager:
                 logging.warning(f"HardwareManager: Module file '{file_path}' not found. {friendly_name} unavailable.")
                 return
 
-            # This entire block is wrapped to catch any error during import or instantiation.
             spec = importlib.util.spec_from_file_location(module_name, file_path)
             if spec is None:
                 logging.error(f"Could not create module spec for {friendly_name} at {file_path}")
@@ -130,14 +128,11 @@ class HardwareManager:
             spec.loader.exec_module(module)
             manager_class = getattr(module, class_name)
             
-            # This is the critical point that can fail if __init__ has an error
             self._loaded_modules[friendly_name] = manager_class()
             
             logging.info(f"HardwareManager: Successfully loaded and initialized {friendly_name}.")
         except Exception as e:
-            # Catch ANY exception during the above process
             logging.error(f"HardwareManager: CRITICAL FAILURE loading module '{friendly_name}'. The hardware will be disabled. Error: {e}", exc_info=True)
-            # Ensure the module is not listed as loaded
             if friendly_name in self._loaded_modules:
                 del self._loaded_modules[friendly_name]
 
@@ -145,11 +140,36 @@ class HardwareManager:
     def get_manager(self, friendly_name):
         return self._loaded_modules.get(friendly_name)
 
+    # --- UPS HAT Methods (New) ---
+    def get_ups_data(self):
+        """Gets voltage and current from the Waveshare UPS HAT."""
+        ups_manager = self.get_manager("Waveshare UPS HAT")
+        if not ups_manager:
+            return {"error": "Waveshare UPS HAT module not loaded or failed to initialize."}
+        
+        try:
+            bus_voltage = ups_manager.get_bus_voltage_V()
+            current_mA = ups_manager.get_current_mA()
+            
+            # The power (in watts) can be calculated. P = V * I
+            # Convert current from mA to A for the calculation.
+            power_W = bus_voltage * (current_mA / 1000.0)
+
+            return {
+                "bus_voltage_V": round(bus_voltage, 2),
+                "current_mA": round(current_mA, 2),
+                "power_W": round(power_W, 2),
+                "status": "ok"
+            }
+        except Exception as e:
+            # This can happen if there's an I2C communication error
+            logging.error(f"Error reading from UPS HAT (INA219): {e}", exc_info=True)
+            return {"error": f"Failed to read from UPS HAT. Check I2C connection. Error: {e}"}
+
     # --- GNSS (GPS) Methods ---
     def get_best_gnss_data(self):
         """Retrieves the latest GNSS data directly from the real-time cache."""
         with self._gps_lock:
-            # Check for stale data, indicating the gpspipe stream might be down
             if time.time() - self._latest_gps_data.get("last_update", 0) > 10:
                 return {"error": "Stale GPS data. `gpspipe` stream may be down."}
             tpv_data = self._latest_gps_data.get("TPV", {})

@@ -1,13 +1,15 @@
 # ==============================================================================
 # Pi Backend Data Poller
-# Version: 3.0.0 (Standalone Service)
+# Version: 3.1.0 (UPS HAT Polling)
 # ==============================================================================
 # This script runs as a persistent background service (systemd). It is
 # responsible for periodically polling various API endpoints (both internal
 # and external) and storing the collected data in the database.
 #
-# The polling frequencies are determined by the settings in the database,
-# which are initially migrated from setup_config.ini.
+# Changelog:
+# - v3.1.0: Added `poll_ups_data` function and scheduled it to run every
+#           minute to log power status from the Waveshare UPS HAT.
+# - v3.0.0: Initial standalone service version.
 # ==============================================================================
 
 import schedule
@@ -31,7 +33,7 @@ import location_services
 import weather_services
 import astronomy_services
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 # --- Global Instances ---
 db_manager = None
@@ -136,6 +138,47 @@ def poll_gnss_data():
         logging.error(f"Error polling GNSS data: {e}", exc_info=True)
 
 
+def poll_ups_data():
+    """Polls the Waveshare UPS HAT for power status and saves it."""
+    logging.info("Polling UPS HAT status...")
+    if not db_manager or not hw_manager:
+        logging.error("Managers not initialized. Skipping UPS poll.")
+        return
+
+    try:
+        ups_data = hw_manager.get_ups_data()
+
+        if ups_data and "error" not in ups_data:
+            # Store each metric from the UPS HAT into the database
+            db_manager.add_data(
+                data_type="ups",
+                value=ups_data.get('bus_voltage_V'),
+                unit="V",
+                source="ina219",
+                metadata={"metric": "bus_voltage"}
+            )
+            db_manager.add_data(
+                data_type="ups",
+                value=ups_data.get('current_mA'),
+                unit="mA",
+                source="ina219",
+                metadata={"metric": "current"}
+            )
+            db_manager.add_data(
+                data_type="ups",
+                value=ups_data.get('power_W'),
+                unit="W",
+                source="ina219",
+                metadata={"metric": "power"}
+            )
+            logging.info(f"Logged UPS Stats: {ups_data.get('bus_voltage_V')}V, {ups_data.get('current_mA')}mA")
+        else:
+            logging.warning(f"Could not poll valid UPS data: {ups_data.get('error', 'No data')}")
+
+    except Exception as e:
+        logging.error(f"Error polling UPS HAT data: {e}", exc_info=True)
+
+
 # --- Main Execution ---
 def main():
     """
@@ -166,6 +209,8 @@ def main():
         schedule.every(config_manager.getint("Polling", "system_stats_seconds", 60)).seconds.do(poll_system_stats)
         schedule.every(config_manager.getint("Polling", "weather_minutes", 15)).minutes.do(poll_weather_data)
         schedule.every(config_manager.getint("Polling", "gps_seconds", 10)).seconds.do(poll_gnss_data)
+        # Add UPS polling job to run every minute
+        schedule.every(1).minute.do(poll_ups_data)
         
         logging.info("Polling jobs scheduled:")
         for job in schedule.get_jobs():

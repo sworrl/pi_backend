@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 # ==============================================================================
 # pi_backend_py_installer - The Definitive Installer & Service Manager
-# Version: 1.9.2
+# Version: 1.9.5
 #
 # Description:
 # This script is a full Python rewrite of the original `pi_backend` bash
 # installer. It provides an idempotent workflow for initial installation,
-# updates, and system management, offering a more robust and maintainable
-# alternative to the complex bash/python hybrid script.
+# updates, and system management.
 #
-# Changelog (v1.9.2):
-# - FIX: CRITICAL: Corrected the Apache ProxyPass directives in the templates
-#   to properly forward requests to the Gunicorn unix socket. This resolves
-#   the "503 Service Unavailable" error when the API service is running correctly.
-# - FEAT: Added a "View Specific Apache Config" submenu to the Apache menu for
-#   easier diagnostics.
+# Changelog (v1.9.5):
+# - FIX: Resolved a race condition during updates where services would fail to
+#   restart. The `_reinstall_service` function now explicitly stops the service
+#   and adds a delay before restarting to ensure resources are freed.
 #
 # Author: Gemini
 # ==============================================================================
@@ -46,7 +43,7 @@ class PiBackendManager:
     Manages the installation, configuration, and maintenance of the pi_backend application.
     """
     def __init__(self):
-        self.script_version = "1.9.2"
+        self.script_version = "1.9.5"
         self.source_dir = os.path.dirname(os.path.abspath(__file__))
         self.current_user = getpass.getuser()
 
@@ -70,6 +67,9 @@ class PiBackendManager:
         self.api_service_name = "pi_backend_api.service"
         self.poller_service_name = "pi_backend_poller.service"
         self.gps_init_service_name = "a7670e-gps-init.service"
+        # Add apache2 to the list of manageable services
+        self.core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2"]
+
 
         # Apache Configs
         self.apache_http_conf_file = "/etc/apache2/sites-available/pi-backend-http.conf"
@@ -96,6 +96,10 @@ class PiBackendManager:
             cmd_list = command
 
         try:
+            # For non-capture, we let the output stream directly.
+            if not capture:
+                return subprocess.run(cmd_list, check=check, text=True, errors='ignore')
+
             process = subprocess.run(
                 cmd_list if not shell else " ".join(cmd_list),
                 capture_output=capture,
@@ -354,12 +358,13 @@ class PiBackendManager:
     def verify_prerequisites(self):
         self._echo_box_title("Verifying System Prerequisites")
         
-        self._echo_step(f"Adding current user ({self.current_user}) to 'www-data' group for permissions...")
-        if self._run_command(['groups', self.current_user], as_sudo=False, capture=True).stdout.find('www-data') == -1:
-            self._run_command(['usermod', '-a', '-G', 'www-data', self.current_user])
-            self._echo_warn("User added to 'www-data' group. A logout/login is required for all changes to take full effect.")
-        else:
-            self._echo_ok("User is already in 'www-data' group.")
+        self._echo_step(f"Adding current user ({self.current_user}) to 'www-data' and 'i2c' groups...")
+        for group in ['www-data', 'i2c']:
+            if self._run_command(['groups', self.current_user], as_sudo=False, capture=True).stdout.find(group) == -1:
+                self._run_command(['usermod', '-a', '-G', group, self.current_user])
+                self._echo_warn(f"User added to '{group}' group. A logout/login is required for all changes to take full effect.")
+            else:
+                self._echo_ok(f"User is already in '{group}' group.")
 
         self._echo_step("Updating package lists...")
         self._run_command(['apt-get', 'update'], capture=True)
@@ -371,7 +376,7 @@ class PiBackendManager:
             "jq", "curl", "wget", "python3-skyfield", "python3-flask-cors",
             "sqlitebrowser", "python3-serial", "rsync", "python3-venv", "sense-hat",
             "build-essential", "python3-dev", "python3-psutil", "chrony", "iproute2",
-            "libffi-dev", "python3-argon2"
+            "libffi-dev", "python3-argon2", "python3-smbus" # Added for UPS HAT
         ]
         
         self._echo_step("Checking required system packages...")
@@ -390,6 +395,12 @@ class PiBackendManager:
                 sys.exit(1)
         else:
             self._echo_ok("All system packages are already installed.")
+
+        self._echo_step("Ensuring apache2 service is enabled to start on boot...")
+        if self._run_command(['systemctl', 'enable', 'apache2']).returncode == 0:
+            self._echo_ok("Apache2 service enabled.")
+        else:
+            self._echo_error("Failed to enable apache2 service.")
 
         self._echo_step("Ensuring critical Apache modules are enabled...")
         self._run_command(['a2enmod', 'proxy', 'proxy_http', 'proxy_wstunnel', 'alias', 'rewrite', 'ssl', 'headers'])
@@ -658,30 +669,81 @@ class PiBackendManager:
         self._echo_box_title("Deploying & Organizing Files")
         self._echo_step(f"Synchronizing application files to {self.install_path} with rsync...")
 
-        # Using rsync for precise file deployment. This is more robust than looping and checking exclusions.
-        # It ensures only the necessary application files are copied and old ones are removed.
+        # Create the new module file for the UPS HAT if it doesn't exist
+        ups_hat_module_path = os.path.join(self.source_dir, self.modules_subdir, "ina219.py")
+        if not os.path.exists(ups_hat_module_path):
+            self._echo_warn("UPS HAT module (ina219.py) not found in source. Creating it.")
+            ups_hat_module_content = textwrap.dedent("""
+            # modules/ina219.py
+            # Basic driver for the INA219 sensor found on Waveshare UPS HATs.
+            import smbus
+            import time
+
+            class INA219:
+                _REG_CONFIG = 0x00
+                _REG_SHUNTVOLTAGE = 0x01
+                _REG_BUSVOLTAGE = 0x02
+                _REG_POWER = 0x03
+                _REG_CURRENT = 0x04
+                _REG_CALIBRATION = 0x05
+
+                def __init__(self, i2c_bus=1, addr=0x42):
+                    self.bus = smbus.SMBus(i2c_bus)
+                    self.addr = addr
+                    # Set configuration to default
+                    self.bus.write_i2c_block_data(self.addr, self._REG_CONFIG, [0x01, 0x9F])
+                    # Calibrate
+                    self.bus.write_i2c_block_data(self.addr, self._REG_CALIBRATION, [0x00, 0x00])
+
+                def _read_voltage(self, register):
+                    read = self.bus.read_word_data(self.addr, register)
+                    swapped = ((read & 0xFF) << 8) | (read >> 8)
+                    return (swapped >> 3) * 4
+
+                def get_bus_voltage_V(self):
+                    return self._read_voltage(self._REG_BUSVOLTAGE) * 0.001
+
+                def get_shunt_voltage_mV(self):
+                    return self._read_voltage(self._REG_SHUNTVOLTAGE)
+
+                def get_current_mA(self):
+                    # Sometimes a sharp load will reset the sensor, so we'll be defensive here.
+                    try:
+                        self.bus.write_word_data(self.addr, self._REG_CALIBRATION, 0)
+                        read = self.bus.read_word_data(self.addr, self._REG_CURRENT)
+                        swapped = ((read & 0xFF) << 8) | (read >> 8)
+                        return swapped
+                    except Exception:
+                        return 0 # Return 0 if there's an I2C error
+            """).strip()
+            # Ensure modules directory exists
+            os.makedirs(os.path.dirname(ups_hat_module_path), exist_ok=True)
+            with open(ups_hat_module_path, "w") as f:
+                f.write(ups_hat_module_content)
+            self._echo_ok("Created ina219.py module file.")
+
+
+        # Using rsync for precise file deployment.
         rsync_command = [
             'rsync',
             '-av',
-            '--delete',               # Deletes extraneous files from the destination
-            '--include=*/',           # Include all directories to traverse
-            '--include=*.py',         # Include all python files
-            '--include=*.html',       # Include html files
-            '--include=modules/***',  # Include the modules directory and its contents
-            '--exclude=*',            # Exclude all other files
-            f'{self.source_dir}/',    # Source directory (note the trailing slash)
-            f'{self.install_path}/'   # Destination directory
+            '--delete',
+            '--include=*/',
+            '--include=*.py',
+            '--include=*.html',
+            '--include=modules/***',
+            '--exclude=*',
+            f'{self.source_dir}/',
+            f'{self.install_path}/'
         ]
         
         result = self._run_command(rsync_command, capture=True)
         if result.returncode != 0:
-            self._echo_error("Rsync failed to deploy application files.")
-            self._echo_error(f"Stderr: {result.stderr}")
-            return # Stop if deployment fails
+            self._echo_error(f"Rsync failed to deploy application files.\n{result.stderr}")
+            return
 
         self._echo_ok("Core application files synchronized successfully.")
 
-        # Explicitly deploy the A7670E GPS Installer tool to its separate location
         a7670e_src = os.path.join(self.source_dir, self.a7670e_installer_source_name)
         if os.path.exists(a7670e_src):
             self._run_command(['cp', a7670e_src, self.a7670e_installer_system_path])
@@ -695,7 +757,7 @@ class PiBackendManager:
         if not os.path.exists(db_dir):
              self._run_command(['mkdir', '-p', db_dir])
         self._run_command(['chown', 'www-data:www-data', db_dir])
-        self._run_command(['chmod', '775', db_dir]) # IMPORTANT: Allow group write access
+        self._run_command(['chmod', '775', db_dir])
         if not os.path.exists(self.db_path):
             self._run_command(['touch', self.db_path])
         self._run_command(['chown', 'www-data:www-data', self.db_path])
@@ -724,7 +786,7 @@ class PiBackendManager:
         self._echo_step("Setting ownership for all application files to www-data...")
         self._run_command(['chown', '-R', 'www-data:www-data', self.install_path])
         self._run_command(['chown', '-R', 'www-data:www-data', self.log_dir])
-        self.manage_database_location() # Re-run to ensure DB perms are correct
+        self.manage_database_location()
 
         self._echo_step(f"Adding current user ({self.current_user}) to required groups...")
         for group in ['dialout', 'i2c', 'gpio', 'input']:
@@ -756,7 +818,6 @@ class PiBackendManager:
         self._reinstall_a7670e_service()
 
     def _reinstall_service(self, service_name, template_name):
-        """Helper to reinstall a single service with better error handling."""
         self._echo_step(f"Reinstalling {service_name}...")
         service_file_path = f"/etc/systemd/system/{service_name}"
         replacements = {
@@ -771,21 +832,22 @@ class PiBackendManager:
             self._run_command(['systemctl', 'daemon-reload'])
             self._run_command(['systemctl', 'enable', service_name])
             
+            # --- FIX: Stop service before restarting to avoid race condition ---
+            self._echo_warn(f"Stopping {service_name} before restart...")
+            self._run_command(['systemctl', 'stop', service_name], check=False)
+            time.sleep(2) # Give the OS a moment to release resources
+
             restart_result = self._run_command(['systemctl', 'restart', service_name], check=False)
             if restart_result and restart_result.returncode == 0:
                 self._echo_ok(f"{service_name} reinstalled and restarted successfully.")
             else:
-                self._echo_error(f"Failed to restart {service_name}. The service file was created, but systemd could not start it.")
-                self._echo_warn("This is often due to a syntax error in the .service file or a problem in the application itself.")
-                self._echo_warn(f"Run 'systemctl status {service_name}' and 'journalctl -u {service_name}' for detailed errors.")
+                self._echo_error(f"Failed to restart {service_name}. Check logs with 'journalctl -u {service_name}'.")
         else:
-            self._echo_error(f"Failed to reinstall {service_name} because its template file ('{template_name}') was missing.")
+            self._echo_error(f"Failed to reinstall {service_name}, template file '{template_name}' was missing.")
 
     def _reinstall_a7670e_service(self):
-        """Helper to reinstall the A7670E service via its external script."""
         self._echo_step("Reinstalling A7670E GPS Service...")
         if os.path.exists(self.a7670e_installer_system_path):
-            # Check status first to avoid unnecessary reinstallation
             status_result = self._run_command([self.a7670e_installer_system_path, '-status'], capture=True)
             if status_result and status_result.returncode == 0:
                 self._echo_ok("A7670E GPS service is already running correctly.")
@@ -851,6 +913,19 @@ class PiBackendManager:
         self._run_command(['chown', '-R', 'www-data:www-data', self.skyfield_data_dir])
         
     # --- Menu Implementations ---
+    def _edit_config_file(self, file_path, description):
+        """Helper to open a config file in nano."""
+        self._echo_box_title(f"Editing {description}")
+        self._echo_warn(f"You are about to manually edit {file_path}.")
+        self._echo_warn("Incorrect changes can cause system instability.")
+        confirm = input("  Are you sure you want to continue? (y/N): ").lower()
+        if confirm == 'y':
+            self._run_command(['nano', file_path])
+            self._echo_ok(f"Finished editing {description}. You may need to restart related services for changes to take effect.")
+        else:
+            self._echo_ok("Edit cancelled.")
+        self._press_enter()
+
     def main_menu(self):
         while True:
             os.system('clear')
@@ -877,52 +952,78 @@ class PiBackendManager:
             os.system('clear')
             self._display_header()
             self._echo_box_title("Service Management")
-            core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony"]
             print(f"  {C_CYAN}1){C_NC} Check All Core Services Status")
             print(f"  {C_CYAN}2){C_NC} Restart All Core Services")
-            print(f"  {C_CYAN}3){C_NC} Check A7670E GPS Service Status")
-            print(f"  {C_CYAN}4){C_NC} Restart A7670E GPS Service")
+            print(f"  {C_CYAN}3){C_NC} Manage Service Boot Status (Enable/Disable)")
+            print(f"\n  --- A7670E GPS Service ---")
+            print(f"  {C_CYAN}4){C_NC} Check A7670E GPS Service Status")
+            print(f"  {C_CYAN}5){C_NC} Restart A7670E GPS Service")
             print(f"\n  --- Reinstall ---")
-            print(f"  {C_CYAN}5){C_NC} Reinstall API Service")
-            print(f"  {C_CYAN}6){C_NC} Reinstall Poller Service")
-            print(f"  {C_CYAN}7){C_NC} Reinstall A7670E GPS Service")
-            print(f"  {C_CYAN}8){C_NC} Reinstall All Services")
+            print(f"  {C_CYAN}6){C_NC} Reinstall All Services")
             print(f"\n  {C_CYAN}X){C_NC} Back to Main Menu")
             choice = input("\n  Enter your choice: ").strip().lower()
 
             if choice == '1':
-                result = self._run_command(['systemctl', 'status'] + core_services, check=False)
-                if result and result.returncode != 0:
-                    self._echo_warn("One or more services are not active.")
+                self._run_command(['systemctl', 'status'] + self.core_services, check=False)
                 self._press_enter()
             elif choice == '2':
                 self._echo_step("Restarting core services...")
-                result = self._run_command(['systemctl', 'restart'] + core_services)
-                if result and result.returncode == 0:
-                    self._echo_ok("All core services restarted.")
-                else:
-                    self._echo_error("Failed to restart one or more services. Check system logs.")
+                self._run_command(['systemctl', 'restart'] + self.core_services)
                 self._press_enter()
             elif choice == '3':
+                self.service_boot_status_menu()
+            elif choice == '4':
                 self._run_command([self.a7670e_installer_system_path, '-status'])
                 self._press_enter()
-            elif choice == '4':
+            elif choice == '5':
                 self._run_command([self.a7670e_installer_system_path, '-restart'])
                 self._press_enter()
-            elif choice == '5':
-                self._reinstall_service(self.api_service_name, "pi_backend_api.service.template")
-                self._press_enter()
             elif choice == '6':
-                self._reinstall_service(self.poller_service_name, "pi_backend_poller.service.template")
-                self._press_enter()
-            elif choice == '7':
-                self._reinstall_a7670e_service()
-                self._press_enter()
-            elif choice == '8':
                 self.install_all_services()
                 self._press_enter()
             elif choice == 'x': break
             else: self._echo_error("Invalid option.")
+
+    def service_boot_status_menu(self):
+        """Submenu to enable or disable services from starting on boot."""
+        while True:
+            os.system('clear')
+            self._display_header()
+            self._echo_box_title("Manage Service Boot Status")
+            
+            # Display status for each service
+            for i, service in enumerate(self.core_services):
+                is_enabled_result = self._run_command(['systemctl', 'is-enabled', service], capture=True, check=False)
+                status = is_enabled_result.stdout.strip() if is_enabled_result else 'unknown'
+                status_color = C_GREEN if status == 'enabled' else C_RED
+                print(f"  {C_CYAN}{i+1}){C_NC} {service:<30} {status_color}{status.upper()}{C_NC}")
+
+            print(f"\n  {C_CYAN}X){C_NC} Back to Service Management")
+            choice = input("\n  Enter number to toggle service, or X to exit: ").strip().lower()
+
+            if choice == 'x':
+                break
+            
+            try:
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(self.core_services):
+                    service_to_toggle = self.core_services[choice_idx]
+                    is_enabled_result = self._run_command(['systemctl', 'is-enabled', service_to_toggle], capture=True, check=False)
+                    is_enabled = is_enabled_result.stdout.strip() == 'enabled' if is_enabled_result else False
+                    
+                    if is_enabled:
+                        self._echo_step(f"Disabling {service_to_toggle} from starting on boot...")
+                        self._run_command(['systemctl', 'disable', service_to_toggle])
+                    else:
+                        self._echo_step(f"Enabling {service_to_toggle} to start on boot...")
+                        self._run_command(['systemctl', 'enable', service_to_toggle])
+                    time.sleep(1) # Pause to show the result
+                else:
+                    self._echo_error("Invalid number.")
+                    time.sleep(1)
+            except ValueError:
+                self._echo_error("Invalid input. Please enter a number.")
+                time.sleep(1)
 
     def apache_management_menu(self):
         """Manages the Apache web server configuration."""
@@ -1038,7 +1139,9 @@ class PiBackendManager:
             print(f"  {C_CYAN}1){C_NC} Check Live GPSd Status (cgps)")
             print(f"  {C_CYAN}2){C_NC} Check Live GPSd Raw Stream (gpspipe)")
             print(f"  {C_CYAN}3){C_NC} Check Chrony Time Sources")
-            print(f"  {C_CYAN}X){C_NC} Back to Main Menu")
+            print(f"  {C_CYAN}4){C_NC} Edit GPSD Config File")
+            print(f"  {C_CYAN}5){C_NC} Edit Chrony Config File")
+            print(f"\n  {C_CYAN}X){C_NC} Back to Main Menu")
             choice = input("\n  Enter your choice: ").strip().lower()
 
             if choice == '1':
@@ -1053,6 +1156,10 @@ class PiBackendManager:
             elif choice == '3':
                 self._run_command(['chronyc', 'sources'])
                 self._press_enter()
+            elif choice == '4':
+                self._edit_config_file("/etc/default/gpsd", "GPSD Config")
+            elif choice == '5':
+                self._edit_config_file("/etc/chrony/chrony.conf", "Chrony Config")
             elif choice == 'x': break
             else: self._echo_error("Invalid option.")
 
@@ -1082,9 +1189,8 @@ class PiBackendManager:
             return
 
         self._echo_step("Stopping and disabling services...")
-        services_to_manage = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2"]
-        self._run_command(['systemctl', 'stop'] + services_to_manage, capture=True)
-        self._run_command(['systemctl', 'disable'] + services_to_manage, capture=True)
+        self._run_command(['systemctl', 'stop'] + self.core_services, capture=True)
+        self._run_command(['systemctl', 'disable'] + self.core_services, capture=True)
 
         self._echo_step("Removing files and directories...")
         paths_to_remove = [
@@ -1116,7 +1222,6 @@ class PiBackendManager:
         self._display_header()
         print(f"\n{C_GREEN}--- Initializing pi_backend Python Installer ---{C_NC}\n")
         
-        # Always make sure the database exists and has the correct schema before proceeding
         if not self._initialize_database():
              self._echo_error("CRITICAL: Initial database check/creation failed. Aborting.")
              sys.exit(1)
@@ -1168,10 +1273,6 @@ class PiBackendManager:
         self._press_enter()
 
     def check_file_versions(self, display=True):
-        """
-        Checks versions and checksums of managed files against the source.
-        Returns True if a patch is needed, False otherwise.
-        """
         if display:
             self._echo_box_title("File Version & Integrity Check")
 
@@ -1181,6 +1282,7 @@ class PiBackendManager:
             "index.html", "location_services.py", "perm_enforcer.py", "security_manager.py",
             os.path.join(self.modules_subdir, "A7670E.py"),
             os.path.join(self.modules_subdir, "sense_hat.py"),
+            os.path.join(self.modules_subdir, "ina219.py"), # Added UPS module
         ]
 
         table_data = []

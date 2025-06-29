@@ -1,25 +1,27 @@
 #
 # File: community_services.py
-# Version: 1.1.0 (PFAS Site Integration)
+# Version: 1.1.1 (Fix NameError)
 #
 # Description: This module provides functionality to find nearby points of
 #              interest (POIs) by querying OpenStreetMap and local data files.
 #
-# Changelog (v1.1.0):
-# - FEATURE: Added functionality to find the nearest PFAS site by loading
-#   data from a local JSON file (`/var/lib/pi_backend/pfas_sites.json`).
-# - FIX: Added missing `import math` for bounding box calculation.
+# Changelog (v1.1.1):
+# - FIX: Added missing `import concurrent.futures` to resolve the NameError
+#   that occurred when trying to use the ThreadPoolExecutor.
 #
 import requests
 import json
 import math
 from geopy import distance
 from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures # *** FIX: Added missing import ***
 
 # Overpass API endpoint for general POIs
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 # Local data file for specialized PFAS data
 PFAS_DATA_FILE = "/var/lib/pi_backend/pfas_sites.json"
+
+__version__ = "1.1.1"
 
 POI_QUERIES = {
     "police": '[out:json];node["amenity"="police"]({{bbox}});out;',
@@ -143,4 +145,3 @@ def get_nearby_pois(lat, lon, types=None):
                     results[poi_type] = {"error": f"An unexpected error occurred: {e}"}
 
     return results
-

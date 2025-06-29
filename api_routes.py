@@ -1,25 +1,14 @@
 #
 # File: api_routes.py
-# Version: 4.6.0 (Add File Info Endpoint)
+# Version: 4.8.0 (Add Astronomy Endpoints)
 #
 # Description: Defines all API endpoints for the pi_backend application.
 #
-# Changelog (v4.6.0):
-# - FEATURE: Added new `/api/system/file-info` endpoint. This endpoint
-#   dynamically scans application scripts, extracts their versions,
-#   calculates SHA256 checksums, and returns this information. It helps
-#   in verifying deployed file integrity from the UI.
-#
-# Changelog (v4.5.5):
-# - FIX: Modified API routes that call `location_services` and `weather_services`
-#   to explicitly pass `db_manager` and `config_manager` from `current_app.config`.
-#   This ensures these services receive necessary dependencies and resolves
-#   "Working outside of application context" errors.
-#
-# Changelog (v4.5.4):
-# - FIX: Corrected the import statement for `communtiy_services` to explicitly
-#   match the filename `communtiy_services.py` provided by the user,
-#   resolving `ModuleNotFoundError`.
+# Changelog (v4.8.0):
+# - FEAT: Added missing endpoints for the astronomy services.
+#   - Added `/api/astronomy/sky-data` to get planet visibility and meteor showers.
+#   - Added `/api/astronomy/satellite-passes` to track satellite flyovers.
+# - FIX: Corrected the omission of astronomy services from the API layer.
 #
 from flask import Blueprint, request, jsonify, g, current_app
 from datetime import datetime, timezone
@@ -27,18 +16,19 @@ import functools
 import logging
 import secrets
 import os
-import hashlib # For checksum calculation
-import re      # For version extraction using regex
+import hashlib
+import re
 
 # Import all service modules
 import hardware
 import location_services
 import weather_services
-import communtiy_services 
+import communtiy_services
+import astronomy_services # <-- Added missing import
 from hardware_manager import HardwareManager 
 
 api_blueprint = Blueprint('api', __name__, url_prefix='/api')
-__version__ = "4.6.0"
+__version__ = "4.8.0"
 
 # --- Authentication Helpers ---
 def _make_error_response(message, status_code):
@@ -130,6 +120,67 @@ def test_weather_services():
         logging.error(f"Error in weather-test endpoint: {e}", exc_info=True)
         return _make_error_response(f"An internal error occurred in the weather service: {e}", 500)
 
+# --- Astronomy Services Endpoints (NEW) ---
+@api_blueprint.route('/astronomy/sky-data', methods=['GET'])
+@require_auth
+def get_sky_data():
+    try:
+        db_manager = current_app.config['DB_MANAGER']
+        config_manager = current_app.config['CONFIG_MANAGER']
+        
+        # Get location from GPS first
+        lat, lon, _ = location_services.get_location_details(
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        if lat is None or lon is None:
+            return _make_error_response("Could not determine location from GPS.", 500)
+
+        # Pass managers to the astronomy service
+        sky_data = astronomy_services.get_full_sky_data(
+            lat=lat, lon=lon,
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        return jsonify(sky_data)
+    except Exception as e:
+        logging.error(f"Error in sky-data endpoint: {e}", exc_info=True)
+        return _make_error_response(f"An internal error occurred in the astronomy service: {e}", 500)
+
+@api_blueprint.route('/astronomy/satellite-passes', methods=['GET'])
+@require_auth
+def get_satellite_passes():
+    try:
+        search_term = request.args.get('search')
+        satellite_id = request.args.get('id')
+        days = request.args.get('days', default=2, type=int)
+
+        if not search_term and not satellite_id:
+            return _make_error_response("A 'search' term (e.g., 'starlink') or satellite 'id' (e.g., '25544' for ISS) is required.", 400)
+
+        db_manager = current_app.config['DB_MANAGER']
+        config_manager = current_app.config['CONFIG_MANAGER']
+
+        lat, lon, _ = location_services.get_location_details(
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        if lat is None or lon is None:
+            return _make_error_response("Could not determine location from GPS.", 500)
+
+        pass_data = astronomy_services.get_satellite_passes(
+            lat=lat, lon=lon,
+            search_term=search_term,
+            satellite_id=satellite_id,
+            days=days,
+            config_manager=config_manager
+        )
+        return jsonify(pass_data)
+    except Exception as e:
+        logging.error(f"Error in satellite-passes endpoint: {e}", exc_info=True)
+        return _make_error_response(f"An internal error occurred in the astronomy service: {e}", 500)
+
+
 # --- Community Services Endpoint ---
 @api_blueprint.route('/community/nearby', methods=['GET'])
 @require_auth
@@ -151,10 +202,7 @@ def get_nearby_pois_endpoint():
         else:
             types_list = None
 
-        # community_services should now get its data paths from config_manager
-        # Assuming community_services needs db_manager/config_manager (e.g., for PFAS_DATA_FILE path),
-        # these need to be passed into its functions similar to location/weather.
-        pois = communtiy_services.get_nearby_pois(lat, lon, types=types_list) # Corrected import name
+        pois = communtiy_services.get_nearby_pois(lat, lon, types=types_list)
         return jsonify({
             "search_location": {"latitude": lat, "longitude": lon},
             "points_of_interest": pois
@@ -173,7 +221,7 @@ def get_user_count():
 @api_blueprint.route('/setup/create_initial_admin', methods=['POST'])
 def create_initial_admin():
     db_manager = current_app.config['DB_MANAGER']
-    if db_manager.check_if_default_credentials_exist() == False: # True means no users, False means users exist
+    if db_manager.check_if_default_credentials_exist() == False:
         return _make_error_response("Initial admin user can only be created if no users exist.", 409)
 
     data = request.get_json()
@@ -193,7 +241,6 @@ def create_initial_admin():
 def get_status():
     db_manager = current_app.config['DB_MANAGER']
     user_count = db_manager.get_db_stats().get('user_count', 0)
-    # default_credentials_active is true if user_count is 0 (meaning no users set up yet)
     default_creds = (user_count == 0) 
     return jsonify({
         "status": "ok",
@@ -214,6 +261,8 @@ def get_hardware_summary():
     summary['gps'] = { "detected": True, "status": "OK" if all(s == 'active' for s in gps_status.values()) else "Error", "details": gps_status }
     lte_info = hw_manager.get_lte_network_info()
     summary['lte_modem'] = { "detected": "error" not in lte_info, "status": "OK" if "error" not in lte_info else "Error", "details": lte_info.get("operator_info", "N/A") if "error" not in lte_info else lte_info.get("error") }
+    ups_data = hw_manager.get_ups_data()
+    summary['ups_hat'] = { "detected": "error" not in ups_data, "status": ups_data.get("status", "Error"), "details": f"{ups_data.get('bus_voltage_V', 0)}V" if "error" not in ups_data else ups_data.get("error") }
     return jsonify(summary)
 
 @api_blueprint.route('/hardware/system-stats', methods=['GET'])
@@ -242,6 +291,13 @@ def scan_bluetooth_devices():
 @require_auth
 def get_time_sync_stats():
     return jsonify(hardware.get_chrony_tracking_stats())
+
+# --- UPS HAT Endpoint (New) ---
+@api_blueprint.route('/hardware/ups', methods=['GET'])
+@require_auth
+def get_ups_hat_data():
+    hw_manager = current_app.config['HW_MANAGER']
+    return jsonify(hw_manager.get_ups_data())
 
 # --- GNSS (GPS) Endpoints ---
 @api_blueprint.route('/hardware/gps/best', methods=['GET'])
@@ -410,8 +466,6 @@ def manage_single_user(username):
 def get_file_info():
     install_path = current_app.config['CONFIG_MANAGER'].get('SystemPaths', 'install_path', fallback='/var/www/pi_backend')
     
-    # Define files we want to inspect and where they typically reside
-    # Note: We check current_app's path and also the /usr/local/bin for external tools
     file_specs = [
         {"name": "api_routes.py", "path": os.path.join(install_path, "api_routes.py"), "type": "Python Script"},
         {"name": "app.py", "path": os.path.join(install_path, "app.py"), "type": "Python Script"},
@@ -426,10 +480,11 @@ def get_file_info():
         {"name": "perm_enforcer.py", "path": os.path.join(install_path, "perm_enforcer.py"), "type": "Python Script"},
         {"name": "security_manager.py", "path": os.path.join(install_path, "security_manager.py"), "type": "Python Script"},
         {"name": "weather_services.py", "path": os.path.join(install_path, "weather_services.py"), "type": "Python Script"},
-        {"name": "communtiy_services.py", "path": os.path.join(install_path, "communtiy_services.py"), "type": "Python Script"}, # Note the typo in filename
+        {"name": "communtiy_services.py", "path": os.path.join(install_path, "communtiy_services.py"), "type": "Python Script"},
         {"name": "A7670E.py", "path": os.path.join(install_path, "modules", "A7670E.py"), "type": "Python Module"},
         {"name": "sense_hat.py", "path": os.path.join(install_path, "modules", "sense_hat.py"), "type": "Python Module"},
-        {"name": "setup_a7670e_gps.sh", "path": "/usr/local/bin/setup_a7670e_gps.sh", "type": "Bash Script (Tool)"}, # External tool
+        {"name": "ina219.py", "path": os.path.join(install_path, "modules", "ina219.py"), "type": "Python Module"},
+        {"name": "setup_a7670e_gps.sh", "path": "/usr/local/bin/setup_a7670e_gps.sh", "type": "Bash Script (Tool)"},
     ]
 
     file_info_list = []
@@ -446,14 +501,12 @@ def get_file_info():
 
         if info["exists"]:
             try:
-                # Calculate SHA256 checksum
                 with open(file_path, 'rb') as f:
                     info["checksum_sha256"] = hashlib.sha256(f.read()).hexdigest()
                 
-                # Extract version for Python scripts if applicable
                 if file_path.endswith(".py") or file_path.endswith(".sh"):
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(2048) # Read first 2KB for efficiency
+                        content = f.read(2048)
                         version_match = re.search(r"Version:\s*([0-9a-zA-Z.-]+)", content)
                         if version_match:
                             info["version"] = version_match.group(1)
