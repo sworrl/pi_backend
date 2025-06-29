@@ -1,0 +1,21 @@
+[Unit]
+Description=UPS HAT Advanced Monitoring Daemon
+# Ensure it starts after networking and multi-user environment is ready
+After=network.target multi-user.target
+
+[Service]
+# Execute the Python script directly, passing 'start' as an argument
+ExecStart=/usr/bin/python3 __INSTALL_PATH__/ups_daemon.py start
+# Always restart the service if it stops unexpectedly
+Restart=always
+# Run the service as the www-data user/group to ensure it can
+# write to /var/lib/ups_daemon and avoid permission issues with the API.
+User=www-data
+Group=www-data
+# StandardOutput and StandardError to journald for logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Enable the service to start automatically at boot
+WantedBy=multi-user.target

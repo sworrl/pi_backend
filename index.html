@@ -112,7 +112,12 @@
                             <label for="poll-interval" class="text-gray-400">Refresh (s):</label>
                             <input type="number" id="poll-interval" value="5" min="1" class="w-16">
                         </div>
-                        <button id="toggle-polling-btn" class="api-btn secondary w-full text-sm"><i data-lucide="play-circle" class="w-4 h-4"></i><span>Start Refresh</span></button>
+                        <button id="toggle-polling-btn" class="api-btn secondary w-full text-sm">
+                            <span id="toggle-polling-icon-wrapper" class="inline-flex items-center justify-center w-4 h-4">
+                                <i data-lucide="play-circle"></i>
+                            </span>
+                            <span id="toggle-polling-text">Start Refresh</span>
+                        </button>
                     </div>
                 </nav>
             </div>
@@ -276,6 +281,14 @@
                             </table>
                         </div>
                     </div>
+
+                    <!-- New System Update Section -->
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="git-pull-request" class="w-5 h-5 text-cyan-400"></i>System Update</h2>
+                        <p class="text-sm text-gray-500 mb-4">Click below to run a system update. This assumes the source files (e.g., from a recent <code>git pull</code>) are already on your Raspberry Pi. The API will restart after the update.</p>
+                        <button id="trigger-system-update-btn" class="api-btn w-full"><i data-lucide="download" class="w-4 h-4"></i>Run System Update</button>
+                        <div id="systemUpdateOutput" class="response-box hidden"></div>
+                    </div>
                 </div>
 
 
@@ -389,8 +402,8 @@
         let pollingIntervalId = null;
         let pollingActive = false;
         let adminCredentials = { username: '', password: '' };
-        const API_BASE_URL = '';
-        const BATTERY_CAPACITY_MAH = 7000;
+        const API_BASE_URL = ''; // Keep this empty if running on the same domain as the backend
+        // Removed BATTERY_CAPACITY_MAH as it will come from the API now.
 
         const el = (id) => document.getElementById(id);
 
@@ -447,10 +460,11 @@
              const dataFetchers = {
                 'overview': updateOverviewData,
                 'gps': updateGpsTab,
-                'power': updatePowerTab,
+                'power': updatePowerTab, // This function is updated
                 'time': updateTimeTab,
                 'hardware': updateHardwareTab,
                 'update': updateFileTab,
+                'users': window.globalApi.listAllUsers // Ensure user list refreshes when tab is active
              };
              if (dataFetchers[tabName]) await dataFetchers[tabName]();
         };
@@ -467,7 +481,7 @@
             const [systemData, timeData, powerData] = await Promise.all([
                 makeApiCall('/hardware/system-stats', 'GET', null, null, true),
                 makeApiCall('/hardware/time-sync', 'GET', null, null, true),
-                makeApiCall('/hardware/ups', 'GET', null, null, true)
+                makeApiCall('/hardware/ups', 'GET', null, null, true) // Call the updated UPS API endpoint
             ]);
             if (systemData && !systemData.error) {
                 el('cpu-usage-val').textContent = `${systemData.cpu_usage_percent?.toFixed(1) || 'N/A'}%`;
@@ -484,7 +498,7 @@
         const updateOverviewData = async () => {
             const [gpsData, powerData, systemData] = await Promise.all([
                 makeApiCall('/hardware/gps/best', 'GET', null, null, true),
-                makeApiCall('/hardware/ups', 'GET', null, null, true),
+                makeApiCall('/hardware/ups', 'GET', null, null, true), // Call updated endpoint
                 makeApiCall('/hardware/system-stats', 'GET', null, null, true)
             ]);
             
@@ -494,9 +508,9 @@
                 <div class="flex justify-between text-gray-400"><span>Altitude:</span><span class="font-mono text-white">${gpsData.altitude_m ? `${gpsData.altitude_m.toFixed(1)} m` : 'N/A'}</span></div>`;
 
             let powerContent;
-            if (powerData && !powerData.error) {
-                const { statusText, statusColor } = getPowerStatus(powerData.current_mA);
-                powerContent = `<div class="flex justify-between text-gray-400"><span>Voltage:</span><span class="font-mono text-white">${powerData.bus_voltage_V?.toFixed(2) || 'N/A'} V</span></div><div class="flex justify-between text-gray-400"><span>Current:</span><span class="font-mono text-white">${powerData.current_mA?.toFixed(1) || 'N/A'} mA</span></div><div class="flex justify-between text-gray-400"><span>Status:</span><span class="font-mono font-bold ${statusColor}">${statusText}</span></div>`;
+            if (powerData && powerData.status === "ok") {
+                const statusColor = getPowerStatusColor(powerData.status_text); // Use status_text from daemon
+                powerContent = `<div class="flex justify-between text-gray-400"><span>Voltage:</span><span class="font-mono text-white">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</span></div><div class="flex justify-between text-gray-400"><span>Current:</span><span class="font-mono text-white">${powerData.current_mA?.toFixed(1) || 'N/A'} mA</span></div><div class="flex justify-between text-gray-400"><span>Status:</span><span class="font-mono font-bold ${statusColor}">${powerData.status_text || 'N/A'}</span></div>`;
             } else { powerContent = `<div class="text-red-400">Failed to load power data.</div>`; }
             el('overview-power-content').innerHTML = powerContent;
 
@@ -504,34 +518,162 @@
         };
 
         // --- Tab Specific Updaters ---
-        const updateGpsTab = async () => { /* ... same as previous version ... */ };
-        const updatePowerTab = async () => { /* ... same as previous version ... */ };
-        const updateTimeTab = async () => { /* ... same as previous version ... */ };
-        const updateHardwareTab = async () => { /* ... same as previous version ... */ };
-        const updateFileTab = async () => { /* ... same as previous version ... */ };
+        const updateGpsTab = async () => {
+            const gpsData = await makeApiCall('/hardware/gps/best', 'GET', null, null, true);
+            const grid = el('gps-data-grid');
+            if (gpsData && !gpsData.error) {
+                grid.innerHTML = `
+                    <div class="col-span-2 md:col-span-3 lg:col-span-5"><div class="grid-item-label">Source</div><div class="grid-item-value">${gpsData.source || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Fix Type</div><div class="grid-item-value">${gpsData.fix_type || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Latitude</div><div class="grid-item-value">${gpsData.latitude?.toFixed(5) || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Longitude</div><div class="grid-item-value">${gpsData.longitude?.toFixed(5) || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Altitude</div><div class="grid-item-value">${gpsData.altitude_m?.toFixed(1) || 'N/A'} m</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Speed</div><div class="grid-item-value">${gpsData.speed_mps ? `${(gpsData.speed_mps * 3.6).toFixed(1)} km/h` : 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Track</div><div class="grid-item-value">${gpsData.track_deg?.toFixed(1) || 'N/A'}°</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Climb Rate</div><div class="grid-item-value">${gpsData.climb_mps ? `${gpsData.climb_mps.toFixed(1)} m/s` : 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Time (UTC)</div><div class="grid-item-value">${gpsData.time_utc ? new Date(gpsData.time_utc).toUTCString() : 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Satellites Used</div><div class="grid-item-value">${gpsData.satellites_used || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Satellites In View</div><div class="grid-item-value">${gpsData.satellites_in_view || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">H. Error (m)</div><div class="grid-item-value">${gpsData.error_horizontal_m?.toFixed(2) || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">V. Error (m)</div><div class="grid-item-value">${gpsData.error_vertical_m?.toFixed(2) || 'N/A'}</div></div>
+                `;
+                // Update OpenStreetMap iframe src if coordinates are available
+                if (gpsData.latitude && gpsData.longitude) {
+                    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${gpsData.longitude-0.01},${gpsData.latitude-0.01},${gpsData.longitude+0.01},${gpsData.latitude+0.01}&layer=mapnik&marker=${gpsData.latitude},${gpsData.longitude}`;
+                    el('osm-map').src = mapUrl;
+                } else {
+                    el('osm-map').src = 'about:blank'; // Clear map if no fix
+                }
+            } else {
+                grid.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">Failed to get GPS data: ${gpsData.error || 'Unknown error'}.</div>`;
+                el('osm-map').src = 'about:blank';
+            }
+        };
+
+        const updatePowerTab = async () => {
+            const powerData = await makeApiCall('/hardware/ups', 'GET', null, null, true);
+            const container = el('ups-data-container');
+            if (powerData && powerData.status === "ok") {
+                const statusColor = getPowerStatusColor(powerData.status_text);
+                container.innerHTML = `
+                    <div class="card p-4"><div class="grid-item-label">Status</div><div class="grid-item-value ${statusColor}">${powerData.status_text || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Battery Voltage</div><div class="grid-item-value">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Bus Voltage</div><div class="grid-item-value">${powerData.bus_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Shunt Voltage</div><div class="grid-item-value">${powerData.shunt_voltage_mV?.toFixed(2) || 'N/A'} mV</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Current</div><div class="grid-item-value">${powerData.current_mA?.toFixed(2) || 'N/A'} mA</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Power</div><div class="grid-item-value">${powerData.power_W?.toFixed(2) || 'N/A'} mW</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Remaining Capacity</div><div class="grid-item-value">${powerData.remaining_mah?.toFixed(0) || 'N/A'} mAh</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Battery %</div><div class="grid-item-value">${powerData.battery_percentage?.toFixed(1) || 'N/A'}%</div></div>
+                    <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Full Charge</div><div class="grid-item-value">${powerData.last_full_charge ? new Date(powerData.last_full_charge).toLocaleString() : 'N/A'}</div></div>
+                    <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Update</div><div class="grid-item-value">${powerData.last_update ? new Date(powerData.last_update).toLocaleString() : 'N/A'}</div></div>
+                `;
+            } else {
+                container.innerHTML = `<div class="col-span-full text-red-400">Failed to load UPS data: ${powerData.error || 'Unknown error'}. Ensure ups_daemon is running.</div>`;
+            }
+        };
+
+        const updateTimeTab = async () => {
+            const timeData = await makeApiCall('/hardware/time-sync', 'GET', null, null, true);
+            const syncContent = el('time-sync-content');
+            const perfContent = el('time-perf-content');
+            if (timeData && !timeData.error) {
+                syncContent.innerHTML = `
+                    <div class="flex justify-between text-gray-400"><span>Service Status:</span><span class="font-mono text-white">${timeData.service_status || 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Leap Status:</span><span class="font-mono text-white">${timeData.leap_status || 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Reference ID:</span><span class="font-mono text-white">${timeData.reference_id || 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Stratum:</span><span class="font-mono text-white">${timeData.stratum || 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Ref Time (UTC):</span><span class="font-mono text-white">${timeData.ref_time_utc || 'N/A'}</span></div>
+                `;
+                perfContent.innerHTML = `
+                    <div class="flex justify-between text-gray-400"><span>System Time Offset:</span><span class="font-mono text-white">${timeData.system_time_offset_s || 'N/A'} s</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Last Update Ago:</span><span class="font-mono text-white">${timeData.last_update_ago_s || 'N/A'} s</span></div>
+                    <div class="flex justify-between text-gray-400"><span>RMS Offset:</span><span class="font-mono text-white">${timeData.rms_offset_s || 'N/A'} s</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Frequency Skew:</span><span class="font-mono text-white">${timeData.frequency_skew_ppm || 'N/A'} ppm</span></div>
+                    <div class="card p-4"><div class="grid-item-label">Residual Freq</div><div class="grid-item-value">${timeData.residual_freq_ppm || 'N/A'} ppm</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Root Delay</div><div class="grid-item-value">${timeData.root_delay_s || 'N/A'} s</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Root Dispersion</div><div class="grid-item-value">${timeData.root_dispersion_s || 'N/A'} s</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Update Interval</div><div class="grid-item-value">${timeData.update_interval_s || 'N/A'} s</div></div>
+                `;
+            } else {
+                syncContent.innerHTML = `<div class="text-red-400">Failed to load time sync data: ${timeData.error || 'Unknown error'}.</div>`;
+                perfContent.innerHTML = ``;
+            }
+        };
+        const updateHardwareTab = async () => {
+            const senseHatData = await makeApiCall('/hardware/sensehat/data', 'GET', null, null, true);
+            const senseHatContainer = el('sensehat-data-container');
+            if (senseHatData && !senseHatData.error) {
+                const sensors = senseHatData.sensors || {};
+                const orientation = sensors.orientation_degrees || {};
+                const accelerometer = sensors.accelerometer_raw || {};
+                senseHatContainer.innerHTML = `
+                    <div class="card p-4"><div class="grid-item-label">Raw Humidity Temp</div><div class="grid-item-value">${sensors.temperature_raw_humidity_c?.toFixed(2) || 'N/A'} °C</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Raw Pressure Temp</div><div class="grid-item-value">${sensors.temperature_raw_pressure_c?.toFixed(2) || 'N/A'} °C</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Corrected Temp</div><div class="grid-item-value">${sensors.temperature_corrected_c?.toFixed(2) || 'N/A'} °C</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Humidity</div><div class="grid-item-value">${sensors.humidity_percent?.toFixed(2) || 'N/A'} %</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Pressure</div><div class="grid-item-value">${sensors.pressure_hpa?.toFixed(2) || 'N/A'} hPa</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Pitch</div><div class="grid-item-value">${orientation.pitch?.toFixed(2) || 'N/A'}°</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Roll</div><div class="grid-item-value">${orientation.roll?.toFixed(2) || 'N/A'}°</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Yaw</div><div class="grid-item-value">${orientation.yaw?.toFixed(2) || 'N/A'}°</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Accel X</div><div class="grid-item-value">${accelerometer.x?.toFixed(2) || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Accel Y</div><div class="grid-item-value">${accelerometer.y?.toFixed(2) || 'N/A'}</div></div>
+                    <div class="card p-4"><div class="grid-item-label">Accel Z</div><div class="grid-item-value">${accelerometer.z?.toFixed(2) || 'N/A'}</div></div>
+                `;
+            } else {
+                senseHatContainer.innerHTML = `<div class="col-span-full text-center text-red-400 py-4">Sense HAT data unavailable: ${senseHatData.error || 'Unknown error'}.</div>`;
+            }
+        };
+        const updateFileTab = async () => {
+            const fileInfo = await makeApiCall('/system/file-info', 'GET', null, null, true);
+            const tableBody = el('file-info-table-body');
+            tableBody.innerHTML = ''; // Clear existing rows
+
+            if (fileInfo && Array.isArray(fileInfo)) {
+                fileInfo.forEach(file => {
+                    const row = document.createElement('tr');
+                    const statusClass = file.status === 'OK' ? 'status-ok' : file.status === 'OUTDATED' ? 'status-outdated' : 'status-missing';
+                    row.innerHTML = `
+                        <td class="p-2">${file.name}</td>
+                        <td class="p-2">${file.version}</td>
+                        <td class="p-2"><span class="${statusClass}">${file.exists ? 'Exists' : 'Missing'} / ${file.checksum_sha256 === 'N/A' ? 'N/A' : (file.status || '')}</span></td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            } else {
+                tableBody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-red-400">Failed to load file information.</td></tr>`;
+            }
+        };
         
-        const getPowerStatus = (current_ma) => {
-             if (current_ma > 10) return { statusText: 'Charging', statusColor: 'text-green-400' };
-             if (current_ma < -10) return { statusText: 'Discharging', statusColor: 'text-yellow-400' };
-             return { statusText: 'Standby', statusColor: 'text-cyan-400' };
+        const getPowerStatusColor = (status_text) => {
+             if (status_text === 'CHARGING') return 'text-green-400';
+             if (status_text === 'DISCHARGING' || status_text === 'EMPTY') return 'text-yellow-400';
+             if (status_text === 'IDLE' || status_text === 'CHARGED') return 'text-cyan-400';
+             return 'text-gray-400';
         }
         
         const updateSidebarPower = (data) => {
-            const getBatteryPercentage = (v) => Math.min(100, Math.max(0, ((v - 6.0) / (8.4 - 6.0)) * 100));
-            const formatTime = (h) => {
-                if(h > 8760) return ">1y"; const d = Math.floor(h/24), hrs=Math.floor(h%24), m=Math.floor((h*60)%60);
-                return d>0 ? `${d}d ${hrs}h` : hrs>0 ? `${hrs}h ${m}m` : `${m}m`;
-            };
-            const getEst = (p, c) => {
-                if(Math.abs(c)<10) return "N/A";
-                const cap = c>0 ? BATTERY_CAPACITY_MAH*(100-p)/100 : BATTERY_CAPACITY_MAH*p/100;
-                return formatTime(cap/Math.abs(c));
-            };
-            
-            if (data && !data.error) {
-                const pct = getBatteryPercentage(data.bus_voltage_V);
-                el('sidebar-battery-percent').textContent = `${pct.toFixed(1)}%`;
-                el('sidebar-battery-time').textContent = getEst(pct, data.current_mA);
+            if (data && data.status === "ok") {
+                const pct = data.battery_percentage;
+                const current_ma = data.current_mA;
+                const remaining_mah = data.remaining_mah;
+
+                const formatTimeEstimate = (mah, current_ma) => {
+                    if (Math.abs(current_ma) < 10) return "N/A"; // Avoid division by zero or near-zero current
+                    const hours_raw = mah / Math.abs(current_ma);
+                    
+                    if (hours_raw * 3600 > 87600) return ">10y"; // More than 10 years, just show >10y
+                    
+                    const days = Math.floor(hours_raw / 24);
+                    const hrs = Math.floor(hours_raw % 24);
+                    const mins = Math.floor((hours_raw * 60) % 60);
+
+                    if (days > 0) return `${days}d ${hrs}h`;
+                    if (hrs > 0) return `${hrs}h ${mins}m`;
+                    return `${mins}m`;
+                };
+
+                el('sidebar-battery-percent').textContent = `${pct?.toFixed(1) || 'N/A'}%`;
+                el('sidebar-battery-time').textContent = formatTimeEstimate(remaining_mah, current_ma);
             } else {
                 el('sidebar-battery-percent').textContent = 'N/A';
                 el('sidebar-battery-time').textContent = 'N/A';
@@ -540,35 +682,343 @@
 
         // --- Admin & User Functions ---
         // (Fully implemented versions of these functions would go here)
-        window.globalApi.listAllUsers = async () => { /* ... */ };
-        window.globalApi.addNewUser = async () => { /* ... */ };
-        // etc...
+        window.globalApi = window.globalApi || {}; // Ensure globalApi exists
+        window.globalApi.listAllUsers = async () => {
+            const users = await makeApiCall('/users', 'GET', null, null, true);
+            const userListOutput = el('userListOutput');
+            if (users && Array.isArray(users)) {
+                userListOutput.innerHTML = `<pre>${JSON.stringify(users, null, 2)}</pre>`;
+                userListOutput.classList.remove('hidden');
+            } else {
+                userListOutput.innerHTML = `<div class="text-red-400">Failed to load users: ${users.error || 'Unknown error'}.</div>`;
+                userListOutput.classList.remove('hidden');
+            }
+        };
+        window.globalApi.addNewUser = async () => {
+            const username = el('addUsername').value;
+            const password = el('addPassword').value;
+            const role = el('addRole').value;
+            if (!username || !password) {
+                showMessage('error', 'Username and password are required.');
+                return;
+            }
+            const result = await makeApiCall('/users', 'POST', { username, password, role }, 'addUserOutput');
+            if (result.message) { showMessage('success', result.message); }
+            window.globalApi.listAllUsers(); // Refresh list
+        };
+        window.globalApi.updateUser = async () => {
+            const username = el('manageUsername').value;
+            const newPassword = el('updatePassword').value;
+            const newRole = el('updateRole').value;
+            if (!username) { showMessage('error', 'Please select a user to manage.'); return; }
+            let body = {};
+            if (newPassword) body.password = newPassword;
+            if (newRole) body.role = newRole;
+            if (Object.keys(body).length === 0) { showMessage('warning', 'No changes to apply.'); return; }
 
-        const checkInitialSetup = async () => { /* ... */ };
+            const result = await makeApiCall(`/users/${username}`, 'PUT', body, 'manageUserOutput');
+            if (result.message) { showMessage('success', result.message); }
+            window.globalApi.listAllUsers(); // Refresh list
+        };
+        window.globalApi.deleteUser = async () => {
+            const username = el('manageUsername').value;
+            if (!username) { showMessage('error', 'Please select a user to delete.'); return; }
+            // Add a confirmation modal here instead of native alert/confirm
+            const confirmDelete = true; // Placeholder for custom modal logic
+            if (confirmDelete) {
+                const result = await makeApiCall(`/users/${username}`, 'DELETE', null, 'manageUserOutput');
+                if (result.message) { showMessage('success', result.message); el('manageUsername').value = ''; }
+                window.globalApi.listAllUsers(); // Refresh list
+            }
+        };
 
+        window.globalApi.geocodeLocation = async () => {
+            const locationQuery = el('geocode-input').value;
+            if (!locationQuery) { showMessage('warning', 'Please enter a location to geocode.'); return; }
+            const result = await makeApiCall(`/services/location-test?location=${encodeURIComponent(locationQuery)}`, 'GET', null, 'geocode-output');
+            if (result.latitude && result.longitude) {
+                showMessage('success', `Geocoded: ${result.address}`);
+            }
+        };
+
+        window.globalApi.reverseGeocodeLocation = async () => {
+            const lat = el('reverse-geocode-lat').value;
+            const lon = el('reverse-geocode-lon').value;
+            if (!lat || !lon) { showMessage('warning', 'Please enter latitude and longitude.'); return; }
+            const result = await makeApiCall(`/services/location-test?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`, 'GET', null, 'reverse-geocode-output');
+            if (result.address) {
+                showMessage('success', `Reverse Geocoded: ${result.address}`);
+            }
+        };
+
+        window.globalApi.getNearbyPois = async () => {
+            const types = el('community-types-input').value;
+            let endpoint = '/community/nearby';
+            if (types) {
+                endpoint += `?types=${encodeURIComponent(types)}`;
+            }
+            const result = await makeApiCall(endpoint, 'GET', null, 'community-output');
+            if (result.points_of_interest) {
+                showMessage('success', `Found ${Object.keys(result.points_of_interest).length} POI types.`);
+            }
+        };
+
+        window.globalApi.fetchWeather = async () => {
+            const location = el('weather-location-input').value;
+            let endpoint = '/services/weather-test';
+            if (location) {
+                endpoint += `?location=${encodeURIComponent(location)}`;
+            }
+            const result = await makeApiCall(endpoint, 'GET', null, null, true); // Suppress general output log
+            const container = el('weather-output-container');
+            container.innerHTML = ''; // Clear previous weather data
+
+            if (result && result.weather_data) {
+                let successCount = 0;
+                for (const serviceName in result.weather_data) {
+                    const serviceData = result.weather_data[serviceName];
+                    const card = document.createElement('div');
+                    card.className = 'card p-4 flex flex-col items-center text-center';
+                    
+                    if (serviceData.error) {
+                        card.innerHTML = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3><p class="text-red-400 text-sm mt-2">Error: ${serviceData.error}</p>`;
+                        showMessage('error', `Weather fetch error for ${serviceName}: ${serviceData.error}`);
+                    } else if (serviceData.normalized_data && serviceData.normalized_data.current) {
+                        const current = serviceData.normalized_data.current;
+                        const iconUrl = current.icon_url || `https://openweathermap.org/img/wn/${current.icon || '01d'}@2x.png`;
+                        card.innerHTML = `
+                            <h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3>
+                            <img src="${iconUrl}" onerror="this.onerror=null;this.src='https://placehold.co/48x48/1f2937/f9fafb?text=N/A';" alt="Weather Icon" class="weather-card-icon">
+                            <p class="text-3xl font-bold text-white mt-2">${current.temperature_c?.toFixed(1) || 'N/A'}°C</p>
+                            <p class="text-sm text-gray-400">${current.description || 'N/A'}</p>
+                        `;
+                        successCount++;
+                    } else {
+                         card.innerHTML = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3><p class="text-gray-500 text-sm mt-2">No current data.</p>`;
+                    }
+                    container.appendChild(card);
+                }
+                if (successCount > 0) {
+                    showMessage('success', `Weather data fetched successfully for ${successCount} service(s).`);
+                }
+            } else {
+                container.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">Failed to fetch weather data: ${result.error || 'Unknown error'}.</div>`;
+                showMessage('error', `Failed to fetch any weather data: ${result.error || 'Unknown error'}`);
+            }
+        };
+
+
+        // --- Admin & Security Functions ---
+        const updateStatus = async () => {
+            const status = await makeApiCall('/status', 'GET', null, null, true);
+            const statusBadge = el('api-status-badge');
+            const apiVersionText = el('api-version-text');
+            if (status && status.status === 'ok') {
+                statusBadge.className = 'text-sm font-bold px-3 py-1 rounded-full inline-block bg-green-500 text-white';
+                statusBadge.textContent = 'API Online';
+                apiVersionText.textContent = status.version;
+                if (status.default_credentials_active) {
+                    el('initial-admin-setup').classList.remove('hidden');
+                }
+            } else {
+                statusBadge.className = 'text-sm font-bold px-3 py-1 rounded-full inline-block bg-red-500 text-white';
+                statusBadge.textContent = 'API Offline';
+                apiVersionText.textContent = 'Error';
+                showMessage('error', 'API is offline or unhealthy.', 0); // Permanent error message
+            }
+            updateAdminPanelState();
+        };
+
+        const checkInitialSetup = async () => {
+            const userCount = await makeApiCall('/setup/user_count', 'GET', null, null, true);
+            if (userCount && userCount.user_count === 0) {
+                el('initial-admin-setup').classList.remove('hidden');
+                showMessage('warning', 'Initial admin account not set up. Please create one.', 0);
+            } else {
+                el('initial-admin-setup').classList.add('hidden');
+            }
+        };
+
+        const createInitialAdmin = async () => {
+            const password = el('initialPassword').value;
+            const confirmPassword = el('confirmInitialPassword').value;
+            if (password !== confirmPassword) {
+                showMessage('error', 'Passwords do not match.');
+                return;
+            }
+            if (password.length < 8) {
+                showMessage('error', 'Password must be at least 8 characters long.');
+                return;
+            }
+            const result = await makeApiCall('/setup/create_initial_admin', 'POST', { password: password }, 'initialAdminOutput');
+            if (result.message) {
+                showMessage('success', result.message);
+                el('initial-admin-setup').classList.add('hidden');
+                // Auto-login with the newly created admin user
+                adminCredentials.username = 'admin';
+                adminCredentials.password = password;
+                updateAdminPanelState();
+            }
+        };
+        
+        const loginAdmin = async () => {
+            const username = el('adminLoginUsername').value;
+            const password = el('adminLoginPassword').value;
+            // Attempt to fetch a protected resource. A 401 indicates failure, 200 indicates success.
+            const result = await makeApiCall('/database/stats', 'GET', null, 'adminLoginOutput', true);
+            if (result.error && result.error.includes("Authentication Failed")) {
+                showMessage('error', 'Admin login failed. Invalid credentials.');
+                return false;
+            } else if (result.status === "ok") {
+                adminCredentials.username = username;
+                adminCredentials.password = password;
+                showMessage('success', 'Admin login successful.');
+                updateAdminPanelState();
+                updateApiKeysList();
+                return true;
+            } else {
+                showMessage('error', 'An unexpected error occurred during login verification.');
+                return false;
+            }
+        };
+
+        const logoutAdmin = () => {
+            adminCredentials = { username: '', password: '' };
+            showMessage('info', 'Logged out from admin session.');
+            updateAdminPanelState();
+        };
+
+        const updateAdminPanelState = () => {
+            const loggedInView = el('admin-logged-in-view');
+            const loggedOutView = el('admin-logged-out-view');
+            const loggedInUsernameSpan = el('loggedInUsername');
+            const keyManagerPanel = el('key-manager-panel');
+            const usersTabButton = el('users-tab-button');
+
+            if (adminCredentials.username && adminCredentials.password) {
+                loggedInView.classList.remove('hidden');
+                loggedOutView.classList.add('hidden');
+                loggedInUsernameSpan.textContent = adminCredentials.username;
+                keyManagerPanel.classList.remove('hidden');
+                usersTabButton.classList.remove('hidden');
+            } else {
+                loggedInView.classList.add('hidden');
+                loggedOutView.classList.remove('hidden');
+                keyManagerPanel.classList.add('hidden');
+                usersTabButton.classList.add('hidden'); // Hide users tab if not admin
+                el('adminLoginUsername').value = '';
+                el('adminLoginPassword').value = '';
+            }
+        };
+
+        const updateApiKeysList = async () => {
+            const keys = await makeApiCall('/keys', 'GET', null, null, true);
+            const apiKeysOutput = el('apiKeysOutput');
+            const externalKeyNameSelect = el('externalKeyNameSelect');
+            externalKeyNameSelect.innerHTML = '<option value="">-- Select or type key name --</option><option value="OTHER">-- Other (type below) --</option>';
+
+            if (keys && Array.isArray(keys)) {
+                apiKeysOutput.innerHTML = `<pre>${JSON.stringify(keys, null, 2)}</pre>`;
+                keys.forEach(key => {
+                    const option = document.createElement('option');
+                    option.value = key.key_name;
+                    option.textContent = key.key_name + (key.is_internal ? ' (Internal)' : ''); 
+                    externalKeyNameSelect.appendChild(option);
+                });
+            } else {
+                apiKeysOutput.innerHTML = `<div class="text-red-400">Failed to load API keys: ${keys.error || 'Unknown error'}.</div>`;
+            }
+        };
+
+        const storeOrUpdateKey = async () => {
+            let keyName = el('externalKeyNameSelect').value;
+            if (keyName === 'OTHER') {
+                keyName = el('externalKeyNameOther').value;
+            }
+            const keyValue = el('externalKeyValue').value;
+
+            if (!keyName || !keyValue) {
+                showMessage('error', 'Key Name and Value are required.');
+                return;
+            }
+            const result = await makeApiCall('/keys', 'POST', { name: keyName, value: keyValue }, 'keyManagerOutput');
+            if (result.message) { showMessage('success', result.message); }
+            updateApiKeysList();
+            el('externalKeyValue').value = '';
+        };
+
+        const generateInternalKey = async () => {
+            const keyName = el('internalKeyName').value;
+            if (!keyName) {
+                showMessage('error', 'Name for the internal key is required.');
+                return;
+            }
+            const result = await makeApiCall('/keys', 'POST', { name: keyName }, 'keyManagerOutput');
+            if (result.message && result.api_key) {
+                showMessage('success', `Generated new key: ${result.api_key}`);
+                el('keyManagerOutput').innerHTML = `<p class="text-white">New Internal API Key for ${keyName}: <strong class="text-green-400">${result.api_key}</strong></p><p class="text-yellow-400">Copy this now, it won't be shown again!</p>`;
+                el('keyManagerOutput').classList.remove('hidden');
+            } else if (result.error) {
+                showMessage('error', result.error);
+            }
+            updateApiKeysList();
+            el('internalKeyName').value = '';
+        };
+        
         // --- Polling Control ---
         const togglePolling = () => {
             pollingActive = !pollingActive;
-            const btn = el('toggle-polling-btn'), icon = btn.querySelector('i'), span = btn.querySelector('span');
+            const btn = el('toggle-polling-btn');
+            const iconWrapper = el('toggle-polling-icon-wrapper'); // The span that contains the icon
+            const textEl = el('toggle-polling-text');
+
+            if (!btn || !iconWrapper || !textEl) {
+                console.error("Missing toggle polling elements in DOM.");
+                return;
+            }
+
+            let newIconName;
             if (pollingActive) {
                 const interval = parseInt(el('poll-interval').value) * 1000 || 5000;
                 pollingIntervalId = setInterval(updateAllData, interval);
-                btn.classList.add('bg-rose-600', 'hover:bg-rose-700'); btn.classList.remove('secondary');
-                span.textContent = 'Stop Refresh'; icon.setAttribute('data-lucide', 'pause-circle');
-                updateAllData(); // Run once immediately
+                btn.classList.add('bg-rose-600', 'hover:bg-rose-700');
+                btn.classList.remove('secondary');
+                textEl.textContent = 'Stop Refresh';
+                newIconName = 'pause-circle';
+                updateAllData();
             } else {
                 clearInterval(pollingIntervalId);
-                btn.classList.remove('bg-rose-600', 'hover:bg-rose-700'); btn.classList.add('secondary');
-                span.textContent = 'Start Refresh'; icon.setAttribute('data-lucide', 'play-circle');
+                btn.classList.remove('bg-rose-600', 'hover:bg-rose-700');
+                btn.classList.add('secondary');
+                textEl.textContent = 'Start Refresh';
+                newIconName = 'play-circle';
             }
-            lucide.createIcons();
+
+            // --- Dynamic Lucide Icon Update ---
+            // Clear existing icon (could be an <i> or an <svg>)
+            iconWrapper.innerHTML = '';
+            // Create new <i> element with the desired data-lucide attribute
+            const newIconElement = document.createElement('i');
+            newIconElement.setAttribute('data-lucide', newIconName);
+            // Append the new <i> element
+            iconWrapper.appendChild(newIconElement);
+            // Have Lucide process just this new element
+            lucide.createIcons({
+                container: newIconElement
+            });
+            // --- End Dynamic Lucide Icon Update ---
         };
 
         const init = async () => {
-            lucide.createIcons();
+            // Initial call to lucide.createIcons() after the DOM is fully structured.
+            // This processes all initial data-lucide attributes on the page.
+            lucide.createIcons(); // This should be the ONLY global call to lucide.createIcons
+            
             await updateStatus();
             await checkInitialSetup();
-            togglePolling(); // Start polling on load
+            updateAdminPanelState();
+            updateApiKeysList();
+            togglePolling(); // This will trigger the first icon update and render correctly
         };
         
         // --- Event Listeners ---
@@ -584,9 +1034,27 @@
         
         el('toggle-polling-btn').addEventListener('click', togglePolling);
         el('clear-output-btn').addEventListener('click', () => el('api-output').innerHTML = '');
-        el('createInitialAdminBtn').addEventListener('click', () => { /* ... create admin logic */ });
-        el('adminLoginBtn').addEventListener('click', () => { /* ... login logic */ });
-        el('adminLogoutBtn').addEventListener('click', () => { /* ... logout logic */ });
+        el('createInitialAdminBtn').addEventListener('click', createInitialAdmin);
+        el('adminLoginBtn').addEventListener('click', loginAdmin);
+        el('adminLogoutBtn').addEventListener('click', logoutAdmin);
+        el('externalKeyNameSelect').addEventListener('change', (e) => {
+            if (e.target.value === 'OTHER') {
+                el('externalKeyNameOther').classList.remove('hidden');
+            } else {
+                el('externalKeyNameOther').classList.add('hidden');
+            }
+        });
+
+        // Add event listener for the new update button
+        el('trigger-system-update-btn').addEventListener('click', async () => {
+            showMessage('info', 'Initiating system update... This may take a few minutes and will restart API services. Check systemUpdateOutput box for details.', 0); // Indefinite message
+            const result = await makeApiCall('/system/trigger-update', 'POST', null, 'systemUpdateOutput', false);
+            if (result.message) {
+                showMessage('success', result.message + " The API will restart shortly. Please refresh the page in about 30-60 seconds.");
+            } else if (result.error) {
+                showMessage('error', `Update failed to start: ${result.error}`);
+            }
+        });
 
         init();
     });

@@ -1,5 +1,4 @@
-#
-# File: weather_services.py
+# pi_backend/weather_services.py
 # Version: 3.3.1 (Fix Application Context)
 #
 # Description: Fetches, aggregates, and normalizes weather data, including
@@ -25,6 +24,7 @@ import sys
 import json
 import time
 import concurrent.futures
+import logging # Added missing import
 # Removed flask's current_app import as it will be passed explicitly
 import location_services
 

@@ -1,5 +1,4 @@
-#
-# File: A7670E.py
+# pi_backend/modules/A7670E.py
 # Version: 2.2.0 (Conflict-Free)
 #
 # Description: A class to interact with the A7670E cellular module.
@@ -15,11 +14,12 @@
 import serial
 import time
 import logging
+import subprocess # Added missing import
 
 class A7670E:
     """
     A class to interact with the A7670E cellular module.
-    This version does not automatically open a serial connection to avoid
+    This version does not automatically open a serial port to avoid
     conflicts with other services like gpsd.
     """
     def __init__(self, port='/dev/serial0', baudrate=115200, timeout=1):
@@ -43,14 +43,16 @@ class A7670E:
         # if gpsd is active, but it won't crash the app on startup.
         try:
             # Temporarily stop gpsd to free the port
-            subprocess.run(['sudo', 'systemctl', 'stop', 'gpsd.socket', 'gpsd.service'], check=True)
+            # Capture output to prevent it from interfering with API response
+            subprocess.run(['sudo', 'systemctl', 'stop', 'gpsd.socket', 'gpsd.service'], check=True, capture_output=True, text=True) # Modified
             time.sleep(1) # Give time for the port to be released
             self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
             return True
         except Exception as e:
             logging.error(f"Failed to acquire serial port {self.port}: {e}")
             # Restart gpsd since we failed
-            subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'])
+            # Capture output to prevent it from interfering with API response
+            subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'], capture_output=True, text=True) # Modified
             return False
 
     def _release_serial_connection(self):
@@ -59,7 +61,8 @@ class A7670E:
             self.ser.close()
         self.ser = None
         # Always restart gpsd to return control
-        subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'])
+        # Capture output to prevent it from interfering with API response
+        subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd.service'], capture_output=True, text=True) # Modified
 
 
     def send_at_command(self, command, expected_response, timeout=2):

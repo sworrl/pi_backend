@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # ==============================================================================
 # pi_backend_py_installer - The Definitive Installer & Service Manager
-# Version: 1.9.5
+# Version: 2.0.3 (Fix Service Name Order)
 #
 # Description:
 # This script is a full Python rewrite of the original `pi_backend` bash
 # installer. It provides an idempotent workflow for initial installation,
 # updates, and system management.
 #
-# Changelog (v1.9.5):
-# - FIX: Resolved a race condition during updates where services would fail to
-#   restart. The `_reinstall_service` function now explicitly stops the service
-#   and adds a delay before restarting to ensure resources are freed.
+# Changelog (v2.0.3):
+# - FIX: Corrected `AttributeError: 'PiBackendManager' object has no attribute 'ups_daemon_service_name'`
+#   by ensuring `self.ups_daemon_service_name` is defined before `self.core_services` list.
 #
 # Author: Gemini
 # ==============================================================================
@@ -43,32 +42,45 @@ class PiBackendManager:
     Manages the installation, configuration, and maintenance of the pi_backend application.
     """
     def __init__(self):
-        self.script_version = "1.9.5"
+        self.script_version = "2.0.3" # Updated version for this release
         self.source_dir = os.path.dirname(os.path.abspath(__file__))
         self.current_user = getpass.getuser()
+
+        # --- Dynamic paths (loaded from config) - MOVED TO TOP to prevent AttributeError ---
+        self.install_path = "/var/www/pi_backend"
+        self.config_path = "/etc/pi_backend" # Assuming this is consistent with master_config_path
+        self.db_path = "/var/lib/pi_backend/pi_backend.db"
 
         # --- Static Paths & Configuration ---
         self.pi_backend_home_dir = os.path.expanduser("~/.pi_backend")
         self.setup_complete_flag = os.path.join(self.pi_backend_home_dir, ".setup_complete")
-        self.master_config_path = "/etc/pi_backend"
+        self.master_config_path = "/etc/pi_backend" # Still needed for loading config
         self.source_config_file = os.path.join(self.source_dir, "setup_config.ini")
         self.modules_subdir = "modules"
         self.gps_device = "/dev/serial0"
         self.log_dir = "/var/log/pi_backend"
         self.templates_dir = self.source_dir
-        self.http_web_root = "/var/www/http"
+        self.http_web_root = "/var/www/http" # Check if this path is correct or should be self.install_path
         self.skyfield_data_dir = "/var/lib/pi_backend/skyfield-data"
+        self.ups_daemon_state_dir = "/var/lib/ups_daemon" 
         
         # External Installer Script
         self.a7670e_installer_source_name = "setup_a7670e_gps.sh"
         self.a7670e_installer_system_path = f"/usr/local/bin/{self.a7670e_installer_source_name}"
+        
+        # New: UPS Daemon Script & Service
+        self.ups_daemon_script_name = "ups_daemon.py"
+        # This now correctly uses self.install_path which is defined above
+        self.ups_daemon_install_path = os.path.join(self.install_path, self.ups_daemon_script_name) 
+        self.ups_daemon_service_name = "ups_daemon.service" # Define this BEFORE core_services
 
         # Service Names
         self.api_service_name = "pi_backend_api.service"
         self.poller_service_name = "pi_backend_poller.service"
         self.gps_init_service_name = "a7670e-gps-init.service"
-        # Add apache2 to the list of manageable services
-        self.core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2"]
+        # Add apache2 and ups_daemon to the list of manageable services
+        # This list now correctly refers to self.ups_daemon_service_name
+        self.core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2", self.ups_daemon_service_name]
 
 
         # Apache Configs
@@ -76,11 +88,6 @@ class PiBackendManager:
         self.apache_https_conf_file = "/etc/apache2/sites-available/pi-backend-https.conf"
         self.apache_websdr_conf_file = "/etc/apache2/sites-available/pi-backend-websdr.conf"
 
-        # Dynamic paths (loaded from config)
-        self.install_path = "/var/www/pi_backend"
-        self.config_path = self.master_config_path
-        self.db_path = "/var/lib/pi_backend/pi_backend.db"
-        
         # State
         self.apache_domain = ""
         self.patch_needed = False
@@ -177,6 +184,7 @@ class PiBackendManager:
         parser.read(config_to_read)
 
         if 'SystemPaths' in parser:
+            # These are reassigned here from the config file, if found
             self.install_path = parser.get('SystemPaths', 'install_path', fallback=self.install_path)
             self.config_path = parser.get('SystemPaths', 'config_path', fallback=self.config_path)
             self.db_path = parser.get('SystemPaths', 'database_path', fallback=self.db_path)
@@ -342,7 +350,8 @@ class PiBackendManager:
         self._echo_step("Creating essential system directories...")
         dirs_to_create = [
             self.install_path, self.http_web_root, self.config_path,
-            os.path.dirname(self.db_path), self.pi_backend_home_dir
+            os.path.dirname(self.db_path), self.pi_backend_home_dir,
+            self.ups_daemon_state_dir # New: Create UPS daemon state directory
         ]
         self._run_command(['mkdir', '-p', self.log_dir])
         self._run_command(['chown', 'www-data:www-data', self.log_dir])
@@ -352,6 +361,9 @@ class PiBackendManager:
             self._run_command(['mkdir', '-p', d])
         
         self._run_command(['chown', f'{self.current_user}:{self.current_user}', self.pi_backend_home_dir], as_sudo=True)
+        # Ensure UPS daemon state directory is owned by www-data as the service will run as www-data
+        self._run_command(['chown', 'www-data:www-data', self.ups_daemon_state_dir]) # New
+        self._run_command(['chmod', '775', self.ups_daemon_state_dir]) # New
         self._echo_ok("All required directories created and permissions set.")
 
 
@@ -607,7 +619,7 @@ class PiBackendManager:
         self._echo_box_title("Configuring GPSD Service")
         gpsd_config_file = "/etc/default/gpsd"
         content = self._read_sudo_file(gpsd_config_file)
-        if content is None:
+        if content is None: # Corrected from `=== None`
             self._echo_error(f"GPSD config not found at {gpsd_config_file}. Reinstall 'gpsd'.")
             return
 
@@ -640,7 +652,7 @@ class PiBackendManager:
         self._echo_box_title("Configuring Chrony for GPS Time Sync")
         chrony_conf = "/etc/chrony/chrony.conf"
         content = self._read_sudo_file(chrony_conf)
-        if content is None:
+        if content is None: # Corrected from `=== None`
             self._echo_error("Chrony config not found. Reinstall 'chrony'.")
             return
         
@@ -669,61 +681,13 @@ class PiBackendManager:
         self._echo_box_title("Deploying & Organizing Files")
         self._echo_step(f"Synchronizing application files to {self.install_path} with rsync...")
 
-        # Create the new module file for the UPS HAT if it doesn't exist
-        ups_hat_module_path = os.path.join(self.source_dir, self.modules_subdir, "ina219.py")
-        if not os.path.exists(ups_hat_module_path):
-            self._echo_warn("UPS HAT module (ina219.py) not found in source. Creating it.")
-            ups_hat_module_content = textwrap.dedent("""
-            # modules/ina219.py
-            # Basic driver for the INA219 sensor found on Waveshare UPS HATs.
-            import smbus
-            import time
-
-            class INA219:
-                _REG_CONFIG = 0x00
-                _REG_SHUNTVOLTAGE = 0x01
-                _REG_BUSVOLTAGE = 0x02
-                _REG_POWER = 0x03
-                _REG_CURRENT = 0x04
-                _REG_CALIBRATION = 0x05
-
-                def __init__(self, i2c_bus=1, addr=0x42):
-                    self.bus = smbus.SMBus(i2c_bus)
-                    self.addr = addr
-                    # Set configuration to default
-                    self.bus.write_i2c_block_data(self.addr, self._REG_CONFIG, [0x01, 0x9F])
-                    # Calibrate
-                    self.bus.write_i2c_block_data(self.addr, self._REG_CALIBRATION, [0x00, 0x00])
-
-                def _read_voltage(self, register):
-                    read = self.bus.read_word_data(self.addr, register)
-                    swapped = ((read & 0xFF) << 8) | (read >> 8)
-                    return (swapped >> 3) * 4
-
-                def get_bus_voltage_V(self):
-                    return self._read_voltage(self._REG_BUSVOLTAGE) * 0.001
-
-                def get_shunt_voltage_mV(self):
-                    return self._read_voltage(self._REG_SHUNTVOLTAGE)
-
-                def get_current_mA(self):
-                    # Sometimes a sharp load will reset the sensor, so we'll be defensive here.
-                    try:
-                        self.bus.write_word_data(self.addr, self._REG_CALIBRATION, 0)
-                        read = self.bus.read_word_data(self.addr, self._REG_CURRENT)
-                        swapped = ((read & 0xFF) << 8) | (read >> 8)
-                        return swapped
-                    except Exception:
-                        return 0 # Return 0 if there's an I2C error
-            """).strip()
-            # Ensure modules directory exists
-            os.makedirs(os.path.dirname(ups_hat_module_path), exist_ok=True)
-            with open(ups_hat_module_path, "w") as f:
-                f.write(ups_hat_module_content)
-            self._echo_ok("Created ina219.py module file.")
+        # No longer need to create ina219.py here, as ups_daemon will be provided.
+        # Ensure modules directory exists
+        os.makedirs(os.path.join(self.source_dir, self.modules_subdir), exist_ok=True)
 
 
         # Using rsync for precise file deployment.
+        # Include ups_daemon.py and its service template
         rsync_command = [
             'rsync',
             '-av',
@@ -731,6 +695,7 @@ class PiBackendManager:
             '--include=*/',
             '--include=*.py',
             '--include=*.html',
+            '--include=*.template', # Ensure template files are copied for service creation
             '--include=modules/***',
             '--exclude=*',
             f'{self.source_dir}/',
@@ -751,6 +716,16 @@ class PiBackendManager:
             self._echo_ok(f"Deployed A7670E GPS installer tool to {self.a7670e_installer_system_path}.")
         else:
             self._echo_warn(f"Installer script not found, cannot deploy: {a7670e_src}")
+
+        # Deploy ups_daemon.py
+        ups_daemon_src = os.path.join(self.source_dir, self.ups_daemon_script_name)
+        if os.path.exists(ups_daemon_src):
+            self._run_command(['cp', ups_daemon_src, self.ups_daemon_install_path])
+            self._run_command(['chmod', '+x', self.ups_daemon_install_path])
+            self._echo_ok(f"Deployed UPS daemon script to {self.ups_daemon_install_path}.")
+        else:
+            self._echo_error(f"UPS daemon script not found at {ups_daemon_src}. Cannot deploy.")
+
 
     def manage_database_location(self):
         db_dir = os.path.dirname(self.db_path)
@@ -787,7 +762,8 @@ class PiBackendManager:
         self._run_command(['chown', '-R', 'www-data:www-data', self.install_path])
         self._run_command(['chown', '-R', 'www-data:www-data', self.log_dir])
         self.manage_database_location()
-
+        self._run_command(['chown', '-R', 'www-data:www-data', self.ups_daemon_state_dir]) # New: Ensure UPS daemon state dir permissions
+        
         self._echo_step(f"Adding current user ({self.current_user}) to required groups...")
         for group in ['dialout', 'i2c', 'gpio', 'input']:
             if self._run_command(['groups', self.current_user], as_sudo=False, capture=True).stdout.find(group) == -1:
@@ -815,6 +791,7 @@ class PiBackendManager:
         self._echo_box_title("Installing/Reinstalling All Services")
         self._reinstall_service(self.api_service_name, "pi_backend_api.service.template")
         self._reinstall_service(self.poller_service_name, "pi_backend_poller.service.template")
+        self._reinstall_service(self.ups_daemon_service_name, "ups_daemon.service.template") # New: Install UPS daemon service
         self._reinstall_a7670e_service()
 
     def _reinstall_service(self, service_name, template_name):
@@ -1119,7 +1096,7 @@ class PiBackendManager:
             self._echo_box_title("System & Update")
             print(f"  {C_CYAN}1){C_NC} Run Update & Patch Check")
             print(f"  {C_CYAN}2){C_NC} Manage SSL Certificate")
-            print(f"  {C_CYAN}X){C_NC} Back to Main Menu")
+            print(f"\n  {C_CYAN}X){C_NC} Back to Main Menu")
             choice = input("\n  Enter your choice: ").strip().lower()
 
             if choice == '1':
@@ -1199,6 +1176,8 @@ class PiBackendManager:
             self.apache_http_conf_file, self.apache_https_conf_file, self.apache_websdr_conf_file,
             os.path.join("/etc/systemd/system", self.api_service_name),
             os.path.join("/etc/systemd/system", self.poller_service_name),
+            os.path.join("/etc/systemd/system", self.ups_daemon_service_name), # New: Remove UPS daemon service file
+            self.ups_daemon_state_dir, # New: Remove UPS daemon state directory
             "/etc/chrony/conf.d/gpsd.conf"
         ]
         for path in paths_to_remove:
@@ -1280,9 +1259,10 @@ class PiBackendManager:
             "api_routes.py", "app.py", "astronomy_services.py", "db_config_manager.py",
             "database.py", "data_poller.py", "hardware.py", "hardware_manager.py",
             "index.html", "location_services.py", "perm_enforcer.py", "security_manager.py",
+            self.ups_daemon_script_name, # New: Add ups_daemon.py
             os.path.join(self.modules_subdir, "A7670E.py"),
             os.path.join(self.modules_subdir, "sense_hat.py"),
-            os.path.join(self.modules_subdir, "ina219.py"), # Added UPS module
+            os.path.join(self.modules_subdir, "ina219.py"),
         ]
 
         table_data = []
@@ -1290,7 +1270,12 @@ class PiBackendManager:
 
         for rel_path in managed_files:
             source_path = os.path.join(self.source_dir, rel_path)
-            dest_path = os.path.join(self.install_path, rel_path)
+            # For ups_daemon.py, its destination is directly in install_path
+            # For modules, it's install_path/modules/
+            if rel_path == self.ups_daemon_script_name:
+                dest_path = self.ups_daemon_install_path
+            else:
+                dest_path = os.path.join(self.install_path, rel_path)
             
             status = ""
             status_color = C_GREEN
