@@ -257,13 +257,6 @@ Cause: The ups_status.py script, which continuously logs data, might not be runn
 
 Solution: Ensure ups_status.py is running in continuous mode in the background. You can start it manually for testing: python3 /path/to/pi_backend/ups_status.py -c. For persistent logging, set it up as a systemd service if you haven't already done so (this would be a manual systemd unit creation not currently covered by setup.py but is a planned enhancement).
 
-Animated SVGs / Advanced Visualizations:
-
-Symptom: Animated SVGs are not appearing in the README.md.
-
-Cause: Direct generation of complex animated SVGs within Markdown or by this model is not currently supported.
-
-Solution: This feature is not implemented. For animated visualizations, you would typically use external tools to generate the SVG and then link to it or embed it, or use JavaScript animation libraries in your frontend.
 
 🤝 Contributing
 Contributions are welcome! If you find a bug or have a feature request, please open an issue on the GitHub repository.
