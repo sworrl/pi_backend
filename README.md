@@ -6,6 +6,35 @@ Get your π-Backend up and running with a single command. This will download the
 
 curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -
 
+📝 Table of Contents
+Overview
+
+Key Features
+
+Architecture
+
+🚀 Quick Start (One-Liner)
+
+🛠️ Installation Guide
+
+Prerequisites
+
+Manual Installation Steps
+
+Initial Setup & Configuration Prompts
+
+Updating Your Backend
+
+🖥️ Usage
+
+📋 API Endpoints Reference
+
+⚠️ Known Issues & Troubleshooting
+
+🤝 Contributing
+
+📄 License
+
 Overview
 The π-Backend is a comprehensive, self-contained Python backend designed specifically for Raspberry Pi devices. It transforms your Pi into a powerful command center, providing a robust API server, continuous data logging, and seamless hardware integration. It's built as a flexible foundation for various frontend applications, from personal dashboards to IoT monitoring systems.
 
@@ -84,37 +113,6 @@ Web Server (Apache): Handles incoming HTTP/HTTPS requests, serves the static das
                                 |                     SQLite Database (`pi_backend.db`)         |
                                 | (Sensor Data, Location, POIs, UPS Metrics, Config, Users, Keys) |
                                 +-----------------------------------------------------------------+
-
-🚀 Quick Start (One-Liner)
-The quickest way to get started is using the one-liner. This command will:
-
-Download the setup.py script.
-
-Execute it with sudo python3.
-
-The setup.py script will then:
-
-Install all necessary system dependencies (Python packages, Apache, gpsd, chrony, etc.).
-
-Set up required directories and permissions.
-
-Configure gpsd and chrony for GPS time synchronization.
-
-Deploy all backend Python files and the index.html dashboard.
-
-Initialize the SQLite database.
-
-Prompt you for essential configurations like creating the initial admin user, setting up SSL (with Certbot), and entering 3rd-party API keys (e.g., OpenWeatherMap, Google Places).
-
-Install and enable systemd services for the API and data poller.
-
-Configure Apache for secure web serving and API proxying.
-
-Run a final API connectivity test.
-
-curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -
-
-Important: After the script completes, a reboot is highly recommended (sudo reboot) to ensure all system changes (like group memberships and time synchronization services) take full effect.
 
 🛠️ Installation Guide
 Prerequisites
