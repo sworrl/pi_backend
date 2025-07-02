@@ -4,7 +4,7 @@ Version: 2.0.10
 ⚡️ Quick Install (One-Liner)
 Get your π-Backend up and running with a single command. This will download the installer and guide you through the setup. Always review scripts before running them with sudo!
 
-curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -
+'''curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -'''
 
 📝 Table of Contents
 Overview
