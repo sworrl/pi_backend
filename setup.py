@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 # ==============================================================================
 # pi_backend_py_installer - The Definitive Installer & Service Manager
-# Version: 2.0.3 (Fix Service Name Order)
+# Version: 2.0.10 (Enhanced Gunicorn Debugging)
 #
 # Description:
 # This script is a full Python rewrite of the original `pi_backend` bash
 # installer. It provides an idempotent workflow for initial installation,
 # updates, and system management.
 #
-# Changelog (v2.0.3):
-# - FIX: Corrected `AttributeError: 'PiBackendManager' object has no attribute 'ups_daemon_service_name'`
-#   by ensuring `self.ups_daemon_service_name` is defined before `self.core_services` list.
+# Changelog (v2.0.10):
+# - FIX: Enhanced `test_api` function to provide more specific debugging guidance
+#   if the API test fails, including checking the `pi_backend_api.service` status
+#   and its journal logs, which is crucial for diagnosing "Service Unavailable" errors.
+#   Also explicitly checks for Gunicorn process.
+# - FEAT: Introduced `self.static_web_root` to separate web-accessible static
+#   files (like index.html) from backend Python code for improved security.
+# - REFACTOR: Modified `deploy_and_manage_files` to copy `index.html` to
+#   `self.static_web_root` and ensure Python files remain in `self.install_path`.
+# - REFACTOR: Updated `configure_apache` to set `DocumentRoot` to `self.static_web_root`,
+#   add `DirectoryIndex index.html`, and explicitly deny direct web access to
+#   `self.install_path` (where Python files reside).
+# - FIX: Corrected `NameError` in `download_skyfield_data`.
+# - FEAT: Modified `run_update_and_patch` to always perform file deployment and
+#   service reinstallation when invoked, ensuring services are refreshed
+#   with every update check, even if no file differences are automatically detected.
 #
 # Author: Gemini
 # ==============================================================================
@@ -34,7 +47,7 @@ C_GREEN = '\033[0;32m'
 C_YELLOW = '\033[1;33m'
 C_RED = '\033[0;31m'
 C_CYAN = '\033[0;36m'
-C_NC = '\033[0m'
+C_NC = '\033[0m' # No Color
 C_BOLD = '\033[1m'
 
 class PiBackendManager:
@@ -42,13 +55,14 @@ class PiBackendManager:
     Manages the installation, configuration, and maintenance of the pi_backend application.
     """
     def __init__(self):
-        self.script_version = "2.0.3" # Updated version for this release
+        self.script_version = "2.0.10" # Updated version for this release
         self.source_dir = os.path.dirname(os.path.abspath(__file__))
         self.current_user = getpass.getuser()
 
         # --- Dynamic paths (loaded from config) - MOVED TO TOP to prevent AttributeError ---
-        self.install_path = "/var/www/pi_backend"
-        self.config_path = "/etc/pi_backend" # Assuming this is consistent with master_config_path
+        self.install_path = "/var/www/pi_backend" # Backend Python code location
+        self.static_web_root = "/var/www/pi_backend_static" # Publicly accessible web files (index.html)
+        self.config_path = "/etc/pi_backend"
         self.db_path = "/var/lib/pi_backend/pi_backend.db"
 
         # --- Static Paths & Configuration ---
@@ -60,27 +74,18 @@ class PiBackendManager:
         self.gps_device = "/dev/serial0"
         self.log_dir = "/var/log/pi_backend"
         self.templates_dir = self.source_dir
-        self.http_web_root = "/var/www/http" # Check if this path is correct or should be self.install_path
         self.skyfield_data_dir = "/var/lib/pi_backend/skyfield-data"
-        self.ups_daemon_state_dir = "/var/lib/ups_daemon" 
         
         # External Installer Script
         self.a7670e_installer_source_name = "setup_a7670e_gps.sh"
         self.a7670e_installer_system_path = f"/usr/local/bin/{self.a7670e_installer_source_name}"
         
-        # New: UPS Daemon Script & Service
-        self.ups_daemon_script_name = "ups_daemon.py"
-        # This now correctly uses self.install_path which is defined above
-        self.ups_daemon_install_path = os.path.join(self.install_path, self.ups_daemon_script_name) 
-        self.ups_daemon_service_name = "ups_daemon.service" # Define this BEFORE core_services
-
         # Service Names
         self.api_service_name = "pi_backend_api.service"
         self.poller_service_name = "pi_backend_poller.service"
         self.gps_init_service_name = "a7670e-gps-init.service"
-        # Add apache2 and ups_daemon to the list of manageable services
-        # This list now correctly refers to self.ups_daemon_service_name
-        self.core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2", self.ups_daemon_service_name]
+        # Removed ups_daemon_service_name from core_services
+        self.core_services = [self.api_service_name, self.poller_service_name, "gpsd", "chrony", "apache2"]
 
 
         # Apache Configs
@@ -349,9 +354,9 @@ class PiBackendManager:
         self._echo_box_title("Initial Directory Setup")
         self._echo_step("Creating essential system directories...")
         dirs_to_create = [
-            self.install_path, self.http_web_root, self.config_path,
+            self.install_path, self.static_web_root, self.config_path,
             os.path.dirname(self.db_path), self.pi_backend_home_dir,
-            self.ups_daemon_state_dir # New: Create UPS daemon state directory
+            # self.ups_daemon_state_dir # Removed: No longer needed
         ]
         self._run_command(['mkdir', '-p', self.log_dir])
         self._run_command(['chown', 'www-data:www-data', self.log_dir])
@@ -361,9 +366,9 @@ class PiBackendManager:
             self._run_command(['mkdir', '-p', d])
         
         self._run_command(['chown', f'{self.current_user}:{self.current_user}', self.pi_backend_home_dir], as_sudo=True)
-        # Ensure UPS daemon state directory is owned by www-data as the service will run as www-data
-        self._run_command(['chown', 'www-data:www-data', self.ups_daemon_state_dir]) # New
-        self._run_command(['chmod', '775', self.ups_daemon_state_dir]) # New
+        # Removed: ups_daemon_state_dir management
+        # self._run_command(['chown', 'www-data:www-data', self.ups_daemon_state_dir])
+        # self._run_command(['chmod', '775', self.ups_daemon_state_dir])
         self._echo_ok("All required directories created and permissions set.")
 
 
@@ -388,7 +393,8 @@ class PiBackendManager:
             "jq", "curl", "wget", "python3-skyfield", "python3-flask-cors",
             "sqlitebrowser", "python3-serial", "rsync", "python3-venv", "sense-hat",
             "build-essential", "python3-dev", "python3-psutil", "chrony", "iproute2",
-            "libffi-dev", "python3-argon2", "python3-smbus" # Added for UPS HAT
+            "libffi-dev", "python3-argon2", "python3-smbus",
+            "python3-matplotlib", "python3-pil", "python3-pil.imagetk"
         ]
         
         self._echo_step("Checking required system packages...")
@@ -577,7 +583,7 @@ class PiBackendManager:
         # HTTP Conf
         replacements_http = {
             "__SERVER_NAME__": self.apache_domain or "localhost",
-            "__HTTP_WEB_ROOT__": self.http_web_root,
+            "__STATIC_WEB_ROOT__": self.static_web_root,
             "__INSTALL_PATH__": self.install_path,
             "# __REDIRECT_PLACEHOLDER__": f"Redirect permanent / https://{self.apache_domain}/" if self.apache_domain else ""
         }
@@ -588,7 +594,7 @@ class PiBackendManager:
         if self.apache_domain:
             replacements_https = {
                 "__SERVER_NAME__": self.apache_domain,
-                "__HTTP_WEB_ROOT__": self.http_web_root,
+                "__STATIC_WEB_ROOT__": self.static_web_root,
                 "__INSTALL_PATH__": self.install_path,
                 "__SSL_CERT_FILE__": f"/etc/letsencrypt/live/{self.apache_domain}/fullchain.pem",
                 "__SSL_KEY_FILE__": f"/etc/letsencrypt/live/{self.apache_domain}/privkey.pem"
@@ -619,14 +625,12 @@ class PiBackendManager:
         self._echo_box_title("Configuring GPSD Service")
         gpsd_config_file = "/etc/default/gpsd"
         content = self._read_sudo_file(gpsd_config_file)
-        if content is None: # Corrected from `=== None`
+        if content is None:
             self._echo_error(f"GPSD config not found at {gpsd_config_file}. Reinstall 'gpsd'.")
             return
 
         original_content = content
-        # Update DEVICES
         content = re.sub(r'^DEVICES=".*"', f'DEVICES="{self.gps_device}"', content, count=1, flags=re.MULTILINE)
-        # Update GPSD_OPTIONS
         content = re.sub(r'^GPSD_OPTIONS=".*"', 'GPSD_OPTIONS="-n"', content, count=1, flags=re.MULTILINE)
 
         if content != original_content:
@@ -652,7 +656,7 @@ class PiBackendManager:
         self._echo_box_title("Configuring Chrony for GPS Time Sync")
         chrony_conf = "/etc/chrony/chrony.conf"
         content = self._read_sudo_file(chrony_conf)
-        if content is None: # Corrected from `=== None`
+        if content is None:
             self._echo_error("Chrony config not found. Reinstall 'chrony'.")
             return
         
@@ -679,36 +683,48 @@ class PiBackendManager:
 
     def deploy_and_manage_files(self):
         self._echo_box_title("Deploying & Organizing Files")
-        self._echo_step(f"Synchronizing application files to {self.install_path} with rsync...")
-
-        # No longer need to create ina219.py here, as ups_daemon will be provided.
-        # Ensure modules directory exists
-        os.makedirs(os.path.join(self.source_dir, self.modules_subdir), exist_ok=True)
-
-
-        # Using rsync for precise file deployment.
-        # Include ups_daemon.py and its service template
-        rsync_command = [
+        
+        # 1. Ensure backend install path exists
+        self._echo_step(f"Ensuring backend install directory {self.install_path} exists...")
+        self._run_command(['mkdir', '-p', self.install_path])
+        
+        # 2. Sync backend Python files and templates (excluding index.html and ups_daemon.py)
+        self._echo_step(f"Synchronizing backend application files to {self.install_path} with rsync...")
+        rsync_backend_command = [
             'rsync',
             '-av',
             '--delete',
+            '--exclude=index.html',
+            '--exclude=ups_daemon.py',
             '--include=*/',
             '--include=*.py',
-            '--include=*.html',
-            '--include=*.template', # Ensure template files are copied for service creation
+            '--include=*.template',
             '--include=modules/***',
             '--exclude=*',
             f'{self.source_dir}/',
             f'{self.install_path}/'
         ]
-        
-        result = self._run_command(rsync_command, capture=True)
-        if result.returncode != 0:
-            self._echo_error(f"Rsync failed to deploy application files.\n{result.stderr}")
+        result_backend = self._run_command(rsync_backend_command, capture=True)
+        if result_backend.returncode != 0:
+            self._echo_error(f"Rsync failed to deploy backend files.\n{result_backend.stderr}")
             return
 
-        self._echo_ok("Core application files synchronized successfully.")
+        self._echo_ok("Core backend files synchronized successfully.")
 
+        # 3. Ensure static web root exists
+        self._echo_step(f"Ensuring static web root directory {self.static_web_root} exists...")
+        self._run_command(['mkdir', '-p', self.static_web_root])
+
+        # 4. Copy index.html to the static web root
+        self._echo_step(f"Copying index.html to static web root {self.static_web_root}...")
+        index_html_src = os.path.join(self.source_dir, "index.html")
+        if os.path.exists(index_html_src):
+            self._run_command(['cp', index_html_src, self.static_web_root])
+            self._echo_ok(f"Copied index.html to {self.static_web_root}.")
+        else:
+            self._echo_error(f"index.html not found in source directory: {index_html_src}")
+
+        # 5. Deploy A7670E installer script
         a7670e_src = os.path.join(self.source_dir, self.a7670e_installer_source_name)
         if os.path.exists(a7670e_src):
             self._run_command(['cp', a7670e_src, self.a7670e_installer_system_path])
@@ -716,15 +732,6 @@ class PiBackendManager:
             self._echo_ok(f"Deployed A7670E GPS installer tool to {self.a7670e_installer_system_path}.")
         else:
             self._echo_warn(f"Installer script not found, cannot deploy: {a7670e_src}")
-
-        # Deploy ups_daemon.py
-        ups_daemon_src = os.path.join(self.source_dir, self.ups_daemon_script_name)
-        if os.path.exists(ups_daemon_src):
-            self._run_command(['cp', ups_daemon_src, self.ups_daemon_install_path])
-            self._run_command(['chmod', '+x', self.ups_daemon_install_path])
-            self._echo_ok(f"Deployed UPS daemon script to {self.ups_daemon_install_path}.")
-        else:
-            self._echo_error(f"UPS daemon script not found at {ups_daemon_src}. Cannot deploy.")
 
 
     def manage_database_location(self):
@@ -760,9 +767,9 @@ class PiBackendManager:
         
         self._echo_step("Setting ownership for all application files to www-data...")
         self._run_command(['chown', '-R', 'www-data:www-data', self.install_path])
+        self._run_command(['chown', '-R', 'www-data:www-data', self.static_web_root])
         self._run_command(['chown', '-R', 'www-data:www-data', self.log_dir])
         self.manage_database_location()
-        self._run_command(['chown', '-R', 'www-data:www-data', self.ups_daemon_state_dir]) # New: Ensure UPS daemon state dir permissions
         
         self._echo_step(f"Adding current user ({self.current_user}) to required groups...")
         for group in ['dialout', 'i2c', 'gpio', 'input']:
@@ -791,7 +798,6 @@ class PiBackendManager:
         self._echo_box_title("Installing/Reinstalling All Services")
         self._reinstall_service(self.api_service_name, "pi_backend_api.service.template")
         self._reinstall_service(self.poller_service_name, "pi_backend_poller.service.template")
-        self._reinstall_service(self.ups_daemon_service_name, "ups_daemon.service.template") # New: Install UPS daemon service
         self._reinstall_a7670e_service()
 
     def _reinstall_service(self, service_name, template_name):
@@ -809,10 +815,9 @@ class PiBackendManager:
             self._run_command(['systemctl', 'daemon-reload'])
             self._run_command(['systemctl', 'enable', service_name])
             
-            # --- FIX: Stop service before restarting to avoid race condition ---
             self._echo_warn(f"Stopping {service_name} before restart...")
             self._run_command(['systemctl', 'stop', service_name], check=False)
-            time.sleep(2) # Give the OS a moment to release resources
+            time.sleep(2)
 
             restart_result = self._run_command(['systemctl', 'restart', service_name], check=False)
             if restart_result and restart_result.returncode == 0:
@@ -842,6 +847,7 @@ class PiBackendManager:
         
         requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
+        api_reachable = False
         for i in range(15):
             self._echo_warn(f"Attempt {i+1}/15...")
             try:
@@ -850,15 +856,32 @@ class PiBackendManager:
                     self._echo_ok("API test PASSED. The backend is live.")
                     import json
                     print(json.dumps(response.json(), indent=2))
-                    return
-            except requests.exceptions.RequestException:
-                pass 
+                    api_reachable = True
+                    break
+            except requests.exceptions.RequestException as e:
+                self._echo_warn(f"API test attempt {i+1} failed: {e}")
             time.sleep(4)
         
-        self._echo_error("API test FAILED after multiple retries.")
-        self._echo_warn(f"Attempting to diagnose the issue with '{self.api_service_name}'...")
-        self._run_command(['systemctl', 'status', self.api_service_name], check=False)
-        self._run_command(['journalctl', '-u', self.api_service_name, '--no-pager', '-n', '20'], check=False)
+        if not api_reachable:
+            self._echo_error("API test FAILED after multiple retries.")
+            self._echo_warn(f"Attempting to diagnose the issue with '{self.api_service_name}'...")
+            
+            # Check service status
+            self._echo_step(f"Checking status of {self.api_service_name}:")
+            self._run_command(['systemctl', 'status', self.api_service_name], check=False)
+            
+            # Check service logs
+            self._echo_step(f"Checking journal logs for {self.api_service_name} (last 20 lines):")
+            self._run_command(['journalctl', '-u', self.api_service_name, '--no-pager', '-n', '20'], check=False)
+            
+            # Check if Gunicorn is listening on port 5000
+            self._echo_step("Checking if Gunicorn is listening on port 5000:")
+            self._run_command(['ss', '-tuln', '|', 'grep', '5000'], check=False, shell=True)
+            
+            self._echo_warn("Please review the service status and logs above for more details to troubleshoot why the API is not reachable.")
+            self._echo_warn("Common issues: Flask app errors, Gunicorn configuration, port conflicts, or permissions.")
+            self._press_enter()
+
 
     def download_skyfield_data(self):
         self._echo_box_title("Downloading Skyfield Astronomy Data")
@@ -1171,13 +1194,11 @@ class PiBackendManager:
 
         self._echo_step("Removing files and directories...")
         paths_to_remove = [
-            self.install_path, self.master_config_path, self.pi_backend_home_dir,
+            self.install_path, self.static_web_root, self.master_config_path, self.pi_backend_home_dir,
             self.skyfield_data_dir, self.log_dir, self.db_path,
             self.apache_http_conf_file, self.apache_https_conf_file, self.apache_websdr_conf_file,
             os.path.join("/etc/systemd/system", self.api_service_name),
             os.path.join("/etc/systemd/system", self.poller_service_name),
-            os.path.join("/etc/systemd/system", self.ups_daemon_service_name), # New: Remove UPS daemon service file
-            self.ups_daemon_state_dir, # New: Remove UPS daemon state directory
             "/etc/chrony/conf.d/gpsd.conf"
         ]
         for path in paths_to_remove:
@@ -1217,23 +1238,28 @@ class PiBackendManager:
             self._echo_warn("File differences detected. Initiating update process.")
             self._press_enter()
             self.run_update_and_patch()
+        else:
+            self._echo_ok("System is up-to-date. Launching main menu.")
+            self._press_enter()
 
         self.main_menu()
 
     # --- Update & Patch Functionality ---
     def run_update_and_patch(self):
-        """Applies updates to the system if needed."""
+        """
+        Applies updates to the system, forcing file deployment and service reinstall.
+        This function is designed to be idempotent and ensure a clean update.
+        """
         os.system('clear')
         self._display_header()
         self._echo_box_title("pi_backend Updater & Patcher")
 
+        # Check file versions for reporting, but always proceed with deployment/reinstall
         self.patch_needed = self.check_file_versions(display=True)
         if not self.patch_needed:
-            self._echo_ok("\nAll application files are up-to-date. No patch needed.")
-            self._press_enter()
-            return
-
-        self._echo_warn("\nFile differences detected. A patch is required.")
+            self._echo_warn("\nNo file differences detected, but proceeding with full update/reinstall as requested.")
+        else:
+            self._echo_warn("\nFile differences detected. Initiating update process.")
         self._press_enter()
 
         self._echo_step("Deploying updated files...")
@@ -1258,11 +1284,12 @@ class PiBackendManager:
         managed_files = [
             "api_routes.py", "app.py", "astronomy_services.py", "db_config_manager.py",
             "database.py", "data_poller.py", "hardware.py", "hardware_manager.py",
-            "index.html", "location_services.py", "perm_enforcer.py", "security_manager.py",
-            self.ups_daemon_script_name, # New: Add ups_daemon.py
+            "index.html", # index.html is now managed separately
+            "location_services.py", "perm_enforcer.py", "security_manager.py",
             os.path.join(self.modules_subdir, "A7670E.py"),
             os.path.join(self.modules_subdir, "sense_hat.py"),
             os.path.join(self.modules_subdir, "ina219.py"),
+            os.path.join(self.modules_subdir, "ups_status.py"),
         ]
 
         table_data = []
@@ -1270,10 +1297,12 @@ class PiBackendManager:
 
         for rel_path in managed_files:
             source_path = os.path.join(self.source_dir, rel_path)
-            # For ups_daemon.py, its destination is directly in install_path
-            # For modules, it's install_path/modules/
-            if rel_path == self.ups_daemon_script_name:
-                dest_path = self.ups_daemon_install_path
+            
+            # Determine destination path based on file type
+            if rel_path == "index.html":
+                dest_path = os.path.join(self.static_web_root, rel_path)
+            elif rel_path.startswith(self.modules_subdir + os.sep):
+                dest_path = os.path.join(self.install_path, rel_path)
             else:
                 dest_path = os.path.join(self.install_path, rel_path)
             
@@ -1373,3 +1402,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\nScript interrupted by user. Exiting.")
         sys.exit(1)
+

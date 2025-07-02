@@ -1,39 +1,19 @@
-<IfModule mod_ssl.c>
-<VirtualHost *:443>
-    ServerName __SERVER_NAME__
+<VirtualHost *:80>
+    ServerName websdr.__SERVER_NAME__ # Example: websdr.your_domain.com
 
-    # Enable proxy modules required for WebSDR
-    <IfModule mod_proxy.c>
-        ProxyPreserveHost On
-        ProxyRequests Off
-        
-        # Proxy for the main WebSDR application HTTP requests
-        ProxyPass /WebSDR/ http://localhost:8001/
-        ProxyPassReverse /WebSDR/ http://localhost:8001/
-        
-        # Proxy for the WebSocket connections used by WebSDR
-        # Requires mod_proxy_wstunnel to be enabled (a2enmod proxy_wstunnel)
-        ProxyPass /WebSDR/ws ws://localhost:8001/ws
-        ProxyPassReverse /WebSDR/ws ws://localhost:8001/ws
-    </IfModule>
+    ProxyPreserveHost On
+    ProxyRequests Off
 
-    # Rewrite engine rules to correctly handle WebSocket upgrade requests
-    <IfModule mod_rewrite.c>
-        RewriteEngine on
-        RewriteCond %{HTTP:UPGRADE} ^WebSocket$ [NC]
-        RewriteCond %{HTTP:CONNECTION} ^Upgrade$ [NC]
-        RewriteRule .* ws://localhost:8001%{REQUEST_URI} [P]
-    </IfModule>
-    
-    # SSL Configuration (uses the same certificate as the main site)
-    SSLEngine on
-    SSLCertificateFile    __SSL_CERT_FILE__
-    SSLCertificateKeyFile __SSL_KEY_FILE__
-    
-    # Optional: More secure SSL/TLS settings
-    SSLProtocol all -SSLv2 -SSLv3
-    SSLCipherSuite HIGH:!aNULL:!MD5
-    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    
+    # Proxy for the main OpenWebRX HTTP traffic
+    ProxyPass / http://127.0.0.1:8001/
+    ProxyPassReverse / http://127.0.0.1:8001/
+
+    # Proxy for the OpenWebRX WebSocket traffic
+    # This is crucial for the waterfall and real-time audio
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) ws://127.0.0.1:8001/$1 [P,L]
+
+    ErrorLog ${APACHE_LOG_DIR}/websdr-error.log
+    CustomLog ${APACHE_LOG_DIR}/websdr-access.log combined
 </VirtualHost>
-</IfModule>

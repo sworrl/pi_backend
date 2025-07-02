@@ -1,14 +1,17 @@
 #
 # File: hardware_manager.py
-# Version: 2.5.0 (UPS Daemon Integration)
+# Version: 2.6.0 (UPS Data from DB)
 #
 # Description: This module acts as a central abstraction layer for hardware.
 #
-# Changelog (v2.5.0):
-# - FEAT: Replaced direct INA219 polling with reading state from `ups_daemon.py`.
-#   - `get_ups_data` now reads `ups_daemon`'s `state.json` file.
-#   - Removed direct INA219 module loading and dependency.
-# - FIX: Ensured INA219.py is no longer loaded or used by HardwareManager.
+# Changelog (v2.6.0):
+# - FEAT: `get_ups_data` now reads the latest UPS metrics directly from the
+#   main application database (`pi_backend.db`) via `DatabaseManager`.
+# - REFACTOR: Removed all direct dependencies and references to `ups_daemon.py`
+#   and its state file, as UPS data logging is now handled by `ups_status.py`
+#   logging directly to the main database.
+# - FIX: Ensured INA219.py is no longer loaded or used by HardwareManager,
+#   as its readings are obtained from the database.
 #
 import sys
 import os
@@ -19,17 +22,19 @@ import threading
 import json
 import time
 
-__version__ = "2.5.0"
+# Import DatabaseManager to fetch UPS data from the main database
+# Adjust path if necessary based on your project structure
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.abspath(os.path.join(script_dir, '..')))
+from database import DatabaseManager
+
+__version__ = "2.6.0"
 
 # Configure logging for this module
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Determine the base directory of the project
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MODULES_DIR = os.path.join(SCRIPT_DIR, 'modules')
-
-# Define the path to the UPS daemon's state file
-UPS_DAEMON_STATE_FILE = "/var/lib/ups_daemon/state.json"
+# Define the path to the main pi_backend database
+DEFAULT_PI_BACKEND_DB_PATH = "/var/lib/pi_backend/pi_backend.db"
 
 
 class HardwareManager:
@@ -52,6 +57,11 @@ class HardwareManager:
 
         self.app_config = app_config
         self._loaded_modules = {}
+        
+        # Initialize DatabaseManager for accessing UPS data
+        self.db_manager = DatabaseManager(database_path=DEFAULT_PI_BACKEND_DB_PATH)
+        if self.db_manager.connection is None:
+            logging.critical("HardwareManager: Failed to connect to main database. UPS data will be unavailable.")
 
         self._latest_gps_data = {
             "TPV": {"class": "TPV", "mode": 0},
@@ -63,14 +73,13 @@ class HardwareManager:
 
         logging.info(f"HardwareManager: Initializing (Version {__version__})")
 
-        if MODULES_DIR not in sys.path:
-            sys.path.insert(0, MODULES_DIR)
+        if os.path.join(script_dir, 'modules') not in sys.path:
+            sys.path.insert(0, os.path.join(script_dir, 'modules'))
 
         # Load all hardware modules
-        self._load_module_by_path("A7670E", "A7670E", "LTE Modem (A7670E)", os.path.join(MODULES_DIR, 'A7670E.py'))
-        self._load_module_by_path("sense_hat", "SenseHatManager", "Sense HAT", os.path.join(MODULES_DIR, 'sense_hat.py'))
-        # NOTE: INA219 is no longer loaded here. Its readings are handled by ups_daemon.py
-        # self._load_module_by_path("ina219", "INA219", "Waveshare UPS HAT", os.path.join(MODULES_DIR, 'ina219.py'))
+        self._load_module_by_path("A7670E", "A7670E", "LTE Modem (A7670E)", os.path.join(script_dir, 'modules', 'A7670E.py'))
+        self._load_module_by_path("sense_hat", "SenseHatManager", "Sense HAT", os.path.join(script_dir, 'modules', 'sense_hat.py'))
+        # NOTE: INA219 is no longer loaded here. Its readings are handled by ups_status.py logging to DB.
 
 
         self._gps_thread.start()
@@ -151,44 +160,41 @@ class HardwareManager:
     def get_manager(self, friendly_name):
         return self._loaded_modules.get(friendly_name)
 
-    # --- UPS HAT Methods (Modified to read from ups_daemon state file) ---
+    # --- UPS HAT Methods (Modified to read from main DB) ---
     def get_ups_data(self):
         """
-        Retrieves UPS data from the ups_daemon's state file.
+        Retrieves UPS data from the main database.
         Returns a dictionary with current UPS status, including SoC and raw values.
         """
-        if not os.path.exists(UPS_DAEMON_STATE_FILE):
-            return {"error": "UPS daemon state file not found. Is the daemon running?", "status": "error"}
+        if self.db_manager.connection is None:
+            return {"error": "Database not connected. Cannot retrieve UPS data.", "status": "error"}
         
         try:
-            with open(UPS_DAEMON_STATE_FILE, 'r') as f:
-                state_data = json.load(f)
-
-            # Ensure all expected keys are present, provide defaults if missing
-            remaining_mah = state_data.get("remaining_mah", 0.0)
-            battery_capacity = state_data.get("BATTERY_CAPACITY_MAH", 7000.0)
+            latest_metric = self.db_manager.get_latest_ups_metric()
             
-            # Calculate battery percentage safely
-            battery_percentage = (remaining_mah / battery_capacity) * 100 if battery_capacity > 0 else 0.0
+            if latest_metric:
+                # The ups_metrics table stores battery_percentage and remaining_mah directly
+                battery_percentage = latest_metric.get("battery_percentage")
+                remaining_mah = latest_metric.get("remaining_mah") # Can be None if ups_status.py doesn't track it
 
-            return {
-                "bus_voltage_V": state_data.get("last_known_bus_voltage"),
-                "current_mA": state_data.get("last_known_current_ma"),
-                "power_W": state_data.get("last_known_power_mw"), # Power is in mW in the daemon, keep consistent
-                "shunt_voltage_mV": state_data.get("last_known_shunt_voltage"), # New: Shunt Voltage
-                "battery_voltage_V": state_data.get("last_known_battery_voltage"), # New: Combined Battery Voltage
-                "remaining_mah": round(remaining_mah, 2),
-                "battery_percentage": round(battery_percentage, 2),
-                "status_text": state_data.get("last_known_status"),
-                "last_full_charge": state_data.get("last_full_charge_timestamp"),
-                "last_update": state_data.get("last_update_timestamp"),
-                "total_charge_seconds": state_data.get("total_charge_seconds", 0),
-                "total_discharge_seconds": state_data.get("total_discharge_seconds", 0),
-                "status": "ok"
-            }
-        except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
-            logging.error(f"Error reading or parsing UPS daemon state file: {e}", exc_info=True)
-            return {"error": f"Failed to read UPS daemon state: {e}", "status": "error"}
+                return {
+                    "bus_voltage_V": latest_metric.get("bus_voltage_V"),
+                    "current_mA": latest_metric.get("current_mA"),
+                    "power_W": latest_metric.get("power_mW"), 
+                    "shunt_voltage_mV": latest_metric.get("shunt_voltage_mV"),
+                    "battery_voltage_V": latest_metric.get("battery_voltage_V"),
+                    "remaining_mah": round(remaining_mah, 2) if remaining_mah is not None else "N/A",
+                    "battery_percentage": round(battery_percentage, 2) if battery_percentage is not None else "N/A",
+                    "status_text": latest_metric.get("status_text"),
+                    # These timestamps are from the metric entry itself, not separate event logs
+                    "last_full_charge": None, # This would require querying ups_events table
+                    "last_update": latest_metric.get("timestamp"),
+                    "total_charge_seconds": None, # This would require more complex aggregation
+                    "total_discharge_seconds": None, # This would require more complex aggregation
+                    "status": "ok"
+                }
+            else:
+                return {"error": "No UPS data found in database. Is ups_status.py running and logging?", "status": "no_data"}
         except Exception as e:
             logging.error(f"An unexpected error occurred in get_ups_data: {e}", exc_info=True)
             return {"error": f"Unexpected error: {e}", "status": "error"}
@@ -297,3 +303,4 @@ class HardwareManager:
                     logging.info(f"Closed connection for {name}.")
                 except Exception as e:
                     logging.error(f"Error closing {name}: {e}")
+

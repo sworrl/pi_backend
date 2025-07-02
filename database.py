@@ -1,9 +1,9 @@
-# ==============================================================================
-# Database Manager for pi_backend
-# Version: 6.1.0 (Database-Backed Configuration)
-# ==============================================================================
-# This module provides a high-level, class-based interface for all database
-# operations, including initialization, data insertion, and querying.
+#
+# File: database.py
+# Version: 6.1.3 (UPS Metrics & Events)
+#
+# Description: This module provides a high-level, class-based interface for all database
+#              operations, including initialization, data insertion, and querying.
 #
 # Changelog:
 # - v6.0.0: Unified API Key Management.
@@ -12,8 +12,12 @@
 #           methods for storing, retrieving, and listing configuration values
 #           directly in the database. This allows all application settings
 #           to be centrally managed and persisted.
-# ==============================================================================
-
+# - v6.1.1: Added new tables for astronomy data, satellite passes, space weather,
+#           and community POIs with upserting logic.
+# - v6.1.2: Added GOOGLE_PLACES_API_KEY to the API key management.
+# - v6.1.3: Added dedicated tables for UPS metrics and events (`ups_metrics`, `ups_events`).
+#           Implemented `add_ups_metric`, `add_ups_event`, and `get_latest_ups_metric`.
+#
 import sqlite3
 import logging
 from threading import Lock
@@ -156,6 +160,80 @@ class DatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+            """,
+            # NEW TABLES FOR POLLED DATA
+            "astronomy_data": """
+                CREATE TABLE IF NOT EXISTS [astronomy_data] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    data_type TEXT NOT NULL, -- e.g., 'sun_moon_events', 'planet_visibility', 'meteor_showers'
+                    location_lat REAL,
+                    location_lon REAL,
+                    data_json TEXT NOT NULL, -- Full JSON blob of the data
+                    UNIQUE(timestamp, data_type, location_lat, location_lon) ON CONFLICT REPLACE
+                );
+            """,
+            "satellite_passes": """
+                CREATE TABLE IF NOT EXISTS [satellite_passes] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL, -- When the pass data was recorded/fetched
+                    satellite_norad_id INTEGER NOT NULL,
+                    satellite_name TEXT NOT NULL,
+                    pass_start_utc TEXT NOT NULL, -- Start time of this specific pass
+                    pass_end_utc TEXT NOT NULL, -- End time of this specific pass
+                    pass_details_json TEXT NOT NULL, -- Full JSON blob for this pass
+                    UNIQUE(satellite_norad_id, pass_start_utc) ON CONFLICT REPLACE
+                );
+            """,
+            "space_weather_data": """
+                CREATE TABLE IF NOT EXISTS [space_weather_data] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL, -- When the data was recorded/fetched
+                    report_time_utc TEXT, -- Official time of the report if available
+                    kp_index REAL,
+                    solar_flare_level TEXT,
+                    geomagnetic_storm_level TEXT,
+                    data_json TEXT NOT NULL, -- Full JSON blob of the data
+                    UNIQUE(timestamp, report_time_utc) ON CONFLICT REPLACE
+                );
+            """,
+            "community_pois": """
+                CREATE TABLE IF NOT EXISTS [community_pois] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    osm_id INTEGER UNIQUE NOT NULL, -- OpenStreetMap ID for unique identification
+                    timestamp TEXT NOT NULL, -- When the POI data was recorded/fetched
+                    poi_type TEXT NOT NULL, -- e.g., 'hospital', 'police', 'pfas_site'
+                    name TEXT,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    address TEXT,
+                    phone TEXT,
+                    website TEXT,
+                    details_json TEXT NOT NULL -- Full JSON blob of all details from API
+                );
+            """,
+            # NEW TABLES FOR UPS DATA
+            "ups_metrics": """
+                CREATE TABLE IF NOT EXISTS [ups_metrics] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL UNIQUE,
+                    bus_voltage_V REAL,
+                    shunt_voltage_mV REAL,
+                    battery_voltage_V REAL,
+                    current_mA REAL,
+                    power_mW REAL,
+                    battery_percentage REAL,
+                    remaining_mah REAL,
+                    status_text TEXT
+                );
+            """,
+            "ups_events": """
+                CREATE TABLE IF NOT EXISTS [ups_events] (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL, -- e.g., 'STATUS_CHANGE', 'BATTERY_FULL', 'BATTERY_EMPTY'
+                    details_json TEXT -- JSON blob of event details
+                );
             """
         }
         for table, schema in table_schemas.items():
@@ -270,7 +348,7 @@ class DatabaseManager:
             if cursor and cursor.rowcount > 0:
                 logging.info(f"Password for user '{username}' updated successfully (re-hashed).")
                 return True
-            logging.warning(f"User '{username}' not found for password update.")
+            logging.warning(f"User '{username}' not found for update.")
             return False
         except Exception as e:
             logging.error(f"Error hashing/updating password for user '{username}': {e}")
@@ -379,7 +457,13 @@ class DatabaseManager:
             "location_data_count": "SELECT COUNT(*) FROM location_data",
             "api_keys_count": "SELECT COUNT(*) FROM api_keys",
             "system_logs_count": "SELECT COUNT(*) FROM system_logs",
-            "config_entry_count": "SELECT COUNT(*) FROM configuration"
+            "config_entry_count": "SELECT COUNT(*) FROM configuration",
+            "astronomy_data_count": "SELECT COUNT(*) FROM astronomy_data",
+            "satellite_passes_count": "SELECT COUNT(*) FROM satellite_passes",
+            "space_weather_data_count": "SELECT COUNT(*) FROM space_weather_data",
+            "community_pois_count": "SELECT COUNT(*) FROM community_pois",
+            "ups_metrics_count": "SELECT COUNT(*) FROM ups_metrics", # New
+            "ups_events_count": "SELECT COUNT(*) FROM ups_events" # New
         }
 
         results = {}
@@ -408,25 +492,6 @@ class DatabaseManager:
         )
         return True
 
-    def get_data_by_type(self, data_type, limit=100):
-        """Retrieves historical data for a specific type."""
-        records = self.execute_query(
-            "SELECT * FROM sensor_data WHERE type = ? ORDER BY timestamp DESC LIMIT ?",
-            (data_type, limit), fetch='all'
-        )
-
-        results = []
-        if records:
-            for record in records:
-                row_dict = dict(record)
-                if row_dict.get('metadata'):
-                    try:
-                        row_dict['metadata'] = json.loads(row_dict['metadata'])
-                    except (json.JSONDecodeError, TypeError):
-                        pass # Leave metadata as is if it's not valid JSON
-                results.append(row_dict)
-        return results
-
     def prune_sensor_data(self, retention_days=90):
         """Deletes sensor data older than a specified retention period."""
         threshold = datetime.now() - timedelta(days=retention_days)
@@ -436,3 +501,204 @@ class DatabaseManager:
              return rows, True, f"Successfully pruned {rows} entries older than {retention_days} days."
         else:
             return 0, False, "Failed to execute prune operation."
+
+    # --- NEW: Specific data storage and retrieval methods ---
+
+    def add_astronomy_data(self, data_type, location_lat, location_lon, data_json, timestamp=None):
+        """Adds or updates astronomy data (sun/moon events, planet visibility, meteor showers)."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.execute_query(
+            """
+            INSERT INTO astronomy_data (timestamp, data_type, location_lat, location_lon, data_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(timestamp, data_type, location_lat, location_lon) DO UPDATE SET
+                data_json = excluded.data_json;
+            """,
+            (timestamp.isoformat(), data_type, location_lat, location_lon, json.dumps(data_json))
+        )
+        return True
+
+    def get_astronomy_data(self, data_type, start_time=None, end_time=None, limit=1):
+        """Retrieves astronomy data for a given type and time range."""
+        query = "SELECT * FROM astronomy_data WHERE data_type = ?"
+        params = [data_type]
+        if start_time:
+            query += " AND timestamp >= ?"
+            params.append(start_time.isoformat())
+        if end_time:
+            query += " AND timestamp <= ?"
+            params.append(end_time.isoformat())
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        records = self.execute_query(query, params, fetch='all')
+        if records:
+            return [json.loads(row['data_json']) for row in records]
+        return []
+
+    def add_satellite_pass(self, satellite_norad_id, satellite_name, pass_start_utc, pass_end_utc, pass_details_json, timestamp=None):
+        """Adds or updates a satellite pass record."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.execute_query(
+            """
+            INSERT INTO satellite_passes (timestamp, satellite_norad_id, satellite_name, pass_start_utc, pass_end_utc, pass_details_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(satellite_norad_id, pass_start_utc) DO UPDATE SET
+                satellite_name = excluded.satellite_name,
+                pass_end_utc = excluded.pass_end_utc,
+                pass_details_json = excluded.pass_details_json,
+                timestamp = excluded.timestamp;
+            """,
+            (timestamp.isoformat(), satellite_norad_id, satellite_name, pass_start_utc, pass_end_utc, json.dumps(pass_details_json))
+        )
+        return True
+
+    def get_satellite_passes(self, satellite_norad_id=None, start_time=None, end_time=None, limit=100):
+        """Retrieves satellite passes based on criteria."""
+        query = "SELECT * FROM satellite_passes WHERE 1=1"
+        params = []
+        if satellite_norad_id:
+            query += " AND satellite_norad_id = ?"
+            params.append(satellite_norad_id)
+        if start_time:
+            query += " AND pass_start_utc >= ?"
+            params.append(start_time.isoformat())
+        if end_time:
+            query += " AND pass_end_utc <= ?"
+            params.append(end_time.isoformat())
+        query += " ORDER BY pass_start_utc ASC LIMIT ?"
+        params.append(limit)
+        records = self.execute_query(query, params, fetch='all')
+        if records:
+            return [json.loads(row['pass_details_json']) for row in records]
+        return []
+
+    def add_space_weather_data(self, report_time_utc, kp_index, solar_flare_level, geomagnetic_storm_level, data_json, timestamp=None):
+        """Adds or updates space weather data."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.execute_query(
+            """
+            INSERT INTO space_weather_data (timestamp, report_time_utc, kp_index, solar_flare_level, geomagnetic_storm_level, data_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(timestamp, report_time_utc) DO UPDATE SET
+                kp_index = excluded.kp_index,
+                solar_flare_level = excluded.solar_flare_level,
+                geomagnetic_storm_level = excluded.geomagnetic_storm_level,
+                data_json = excluded.data_json;
+            """,
+            (timestamp.isoformat(), report_time_utc, kp_index, solar_flare_level, geomagnetic_storm_level, json.dumps(data_json))
+        )
+        return True
+
+    def get_latest_space_weather(self):
+        """Retrieves the latest space weather report."""
+        record = self.execute_query(
+            "SELECT * FROM space_weather_data ORDER BY timestamp DESC LIMIT 1",
+            fetch='one'
+        )
+        if record:
+            return json.loads(record['data_json'])
+        return None
+
+    def add_community_poi(self, osm_id, poi_type, name, latitude, longitude, address=None, phone=None, website=None, details_json=None, timestamp=None):
+        """Adds or updates a community POI."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.execute_query(
+            """
+            INSERT INTO community_pois (osm_id, timestamp, poi_type, name, latitude, longitude, address, phone, website, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(osm_id) DO UPDATE SET
+                timestamp = excluded.timestamp,
+                poi_type = excluded.poi_type,
+                name = excluded.name,
+                latitude = excluded.latitude,
+                longitude = excluded.longitude,
+                address = excluded.address,
+                phone = excluded.phone,
+                website = excluded.website,
+                details_json = excluded.details_json;
+            """,
+            (osm_id, timestamp.isoformat(), poi_type, name, latitude, longitude, address, phone, website, json.dumps(details_json) if details_json else None)
+        )
+        return True
+
+    def get_community_pois(self, poi_type=None, latitude=None, longitude=None, radius_km=None, limit=100):
+        """Retrieves community POIs, optionally filtered by type and proximity."""
+        query = "SELECT * FROM community_pois WHERE 1=1"
+        params = []
+        if poi_type:
+            query += " AND poi_type = ?"
+            params.append(poi_type)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        records = self.execute_query(query, params, fetch='all')
+        
+        # Implement proximity filtering in Python for simplicity, if radius_km is provided
+        # This is not optimized for large datasets and should be done in SQL with spatial extensions for performance
+        results = []
+        if records:
+            for row in records:
+                poi = dict(row)
+                if latitude is not None and longitude is not None and radius_km is not None:
+                    try:
+                        from geopy import distance
+                        poi_coords = (poi['latitude'], poi['longitude'])
+                        origin_coords = (latitude, longitude)
+                        dist = distance.distance(origin_coords, poi_coords).km
+                        if dist <= radius_km:
+                            poi['distance_km'] = round(dist, 2)
+                            if poi['details_json']:
+                                poi['details_json'] = json.loads(poi['details_json'])
+                            results.append(poi)
+                    except ImportError:
+                        logging.warning("geopy not installed, cannot perform proximity filtering for POIs.")
+                        if poi['details_json']:
+                            poi['details_json'] = json.loads(poi['details_json'])
+                        results.append(poi) # Add without filtering if geopy isn't available
+                else:
+                    if poi['details_json']:
+                        poi['details_json'] = json.loads(poi['details_json'])
+                    results.append(poi)
+        return results
+
+    # --- UPS Data Methods (New) ---
+    def add_ups_metric(self, timestamp, bus_voltage_V, shunt_voltage_mV, battery_voltage_V, current_mA, power_mW, battery_percentage, remaining_mah, status_text):
+        """Adds a new UPS metric reading to the database."""
+        self.execute_query(
+            """
+            INSERT INTO ups_metrics (timestamp, bus_voltage_V, shunt_voltage_mV, battery_voltage_V, current_mA, power_mW, battery_percentage, remaining_mah, status_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(timestamp) DO UPDATE SET
+                bus_voltage_V = excluded.bus_voltage_V,
+                shunt_voltage_mV = excluded.shunt_voltage_mV,
+                battery_voltage_V = excluded.battery_voltage_V,
+                current_mA = excluded.current_mA,
+                power_mW = excluded.power_mW,
+                battery_percentage = excluded.battery_percentage,
+                remaining_mah = excluded.remaining_mah,
+                status_text = excluded.status_text;
+            """,
+            (timestamp, bus_voltage_V, shunt_voltage_mV, battery_voltage_V, current_mA, power_mW, battery_percentage, remaining_mah, status_text)
+        )
+        return True
+
+    def add_ups_event(self, timestamp, event_type, details=None):
+        """Adds a new UPS event to the database."""
+        self.execute_query(
+            "INSERT INTO ups_events (timestamp, event_type, details_json) VALUES (?, ?, ?)",
+            (timestamp, event_type, json.dumps(details) if details else None)
+        )
+        return True
+
+    def get_latest_ups_metric(self):
+        """Retrieves the most recent UPS metric reading."""
+        record = self.execute_query(
+            "SELECT * FROM ups_metrics ORDER BY timestamp DESC LIMIT 1",
+            fetch='one'
+        )
+        return dict(record) if record else None
+

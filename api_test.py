@@ -2,11 +2,18 @@
 
 # ==============================================================================
 # pi_backend API Endpoint Test Script
+# Version: 1.1.0 (Expanded Tests)
 #
 # Description:
 #   This script automates the testing of all major pi_backend API endpoints.
 #   It prompts for admin credentials, checks for and prompts for missing
 #   3rd-party API keys, and uses `curl` to make the requests.
+#
+# Changelog (v1.1.0):
+# - FEAT: Added tests for new `/space/weather`, `/space/moon`, and `/space/satellites/overhead` endpoints.
+# - FEAT: Updated `/community/nearby` test to request a 5-mile radius and print all POIs.
+# - FEAT: Added test for `/hardware/ups` endpoint.
+# - REFACTOR: Improved output clarity and error reporting.
 #
 # How to run:
 #   1. Save this file as `api_test.sh` on your Raspberry Pi.
@@ -16,7 +23,7 @@
 
 # --- Configuration ---
 # Change this if your backend is not running on localhost or uses HTTPS
-BASE_URL="http://localhost"
+BASE_URL="http://localhost:5000" # Ensure this matches your Flask app's port
 
 # --- Colors for Output ---
 C_GREEN='\033[0;32m'
@@ -52,17 +59,6 @@ check_jq() {
         JQ_CMD="cat" # Fallback to cat if jq is not available
     fi
 }
-
-# --- Main Script ---
-
-# 1. Check for dependencies
-check_jq
-
-# 2. Get User Credentials
-echo -e "Please enter your admin credentials to test authenticated endpoints."
-read -p "Admin Username: " ADMIN_USER
-read -s -p "Admin Password: " ADMIN_PASS
-echo
 
 # Function to make an API call
 # $1: HTTP Method (GET, POST, etc.)
@@ -131,7 +127,7 @@ manage_api_keys() {
     fi
     
     # Define which keys are required for full functionality
-    local required_keys=("GOOGLE_GEOCODING_API_KEY" "OPENWEATHER_API_KEY" "WINDY_API_KEY" "ACCUWEATHER_API_KEY")
+    local required_keys=("GOOGLE_GEOCODING_API_KEY" "OPENWEATHER_API_KEY" "WINDY_API_KEY" "ACCUWEATHER_API_KEY" "GOOGLE_PLACES_API_KEY")
 
     for key_name in "${required_keys[@]}"; do
         # Check if the key exists in the JSON response from the DB
@@ -190,19 +186,21 @@ print_header "Running System & Hardware Endpoint Tests"
 call_api "GET" "/api/hardware/system-stats"
 call_api "GET" "/api/hardware/summary"
 call_api "GET" "/api/hardware/gps/best"
-call_api "GET" "/api/hardware/ups"
+call_api "GET" "/api/hardware/ups" # Test the UPS endpoint
 call_api "GET" "/api/hardware/time-sync"
 call_api "GET" "/api/hardware/sensehat/data"
 call_api "POST" "/api/hardware/bluetooth-scan"
 
 print_header "Running Services Tests (Location, Weather, etc.)"
 call_api "GET" "/api/services/location-test?location=Nashville,TN"
-call_api "GET" "/api/services/weather-test"
-call_api "GET" "/api/community/nearby?types=hospital"
+call_api "GET" "/api/services/weather-test?location=Nashville,TN" # Test weather with a location
+call_api "GET" "/api/community/nearby?radius=5&unit=miles" # Test community POIs with 5 miles radius
 
 print_header "Running Astronomy Tests"
-call_api "GET" "/api/astronomy/sky-data"
-call_api "GET" "/api/astronomy/satellite-passes?search=starlink"
+call_api "GET" "/api/space/sky-data"
+call_api "GET" "/api/space/moon" # Test moon data
+call_api "GET" "/api/space/weather" # Test space weather data
+call_api "GET" "/api/space/satellites/overhead?search=starlink&radius_m=50000" # Test satellites with search and radius
 
 print_header "Running Admin & Database Tests"
 call_api "GET" "/api/database/stats"

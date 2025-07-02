@@ -6,6 +6,10 @@
     <title>π-Backend Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Leaflet CSS for interactive maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"
+        xintegrity="sha512-xod9W+NpiX/fQx8I3p0zR7mF+D+L+F+0+S+G+A+B+C+D+E+F+G+H+I+J+K+L+M+N+O+P+Q+R+S+T+U+V+W+X+Y+Z"
+        crossorigin=""/>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         :root {
@@ -74,6 +78,87 @@
         .status-ok { color: var(--success-color); }
         .status-outdated { color: var(--warning-color); }
         .status-missing { color: var(--error-color); }
+        .status-unknown { color: var(--text-secondary); } /* Added for unknown status */
+
+        /* Leaflet map specific styles */
+        #mapid {
+            height: 600px; /* Set a minimum height for the map */
+            min-height: 600px; /* Ensure it's at least this tall */
+            width: 100%;
+            border-radius: 0.5rem;
+        }
+        /* Table styling for satellite list */
+        .satellite-table th, .satellite-table td {
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .satellite-table th {
+            text-align: left;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        /* Custom POI Marker Icon Styling */
+        .poi-marker-icon {
+            background-color: var(--marker-bg-color, #3b82f6); /* Default blue */
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            border: 2px solid white;
+            box-shadow: 0 0 0 2px rgba(0,0,0,0.5);
+        }
+        .leaflet-tooltip.poi-tooltip {
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 5px 8px;
+            font-size: 12px;
+            font-weight: 500;
+            opacity: 1 !important; /* Ensure tooltip is always visible */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .leaflet-tooltip-bottom:before {
+            border-bottom-color: rgba(0,0,0,0.7) !important;
+        }
+        .leaflet-tooltip-top:before {
+            border-top-color: rgba(0,0,0,0.7) !important;
+        }
+
+        /* API Endpoints Table Styling */
+        .api-endpoints-table th, .api-endpoints-table td {
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: top;
+        }
+        .api-endpoints-table th {
+            text-align: left;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        .api-endpoints-table tr:last-child td {
+            border-bottom: none;
+        }
+        .api-endpoints-table .method-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: black; /* Default text color for method badges */
+        }
+        .api-endpoints-table .method-GET { background-color: #22c55e; } /* Green */
+        .api-endpoints-table .method-POST { background-color: #3b82f6; } /* Blue */
+        .api-endpoints-table .method-PUT { background-color: #f59e0b; } /* Orange */
+        .api-endpoints-table .method-DELETE { background-color: #ef4444; } /* Red */
+        .api-endpoints-table .method-OTHER { background-color: #94a3b8; } /* Slate */
     </style>
 </head>
 <body class="font-sans antialiased">
@@ -129,13 +214,16 @@
             <header class="mb-6">
                 <div id="tabs" class="flex items-center border-b border-gray-800 text-sm font-medium text-gray-400 flex-wrap">
                     <button class="tab-button active px-4 py-2" data-tab="overview">Overview</button>
-                    <button class="tab-button px-4 py-2" data-tab="gps">GPS</button>
+                    <button class="tab-button px-4 py-2" data-tab="map-location">Map & Location</button>
+                    <button class="tab-button px-4 py-2" data-tab="satellites">Satellites</button>
+                    <button class="tab-button px-4 py-2" data-tab="weather">Weather</button>
+                    <button class="tab-button px-4 py-2" data-tab="space-weather">Space Weather</button>
+                    <button class="tab-button px-4 py-2" data-tab="moon-info">Moon Info</button>
                     <button class="tab-button px-4 py-2" data-tab="power">Power</button>
                     <button class="tab-button px-4 py-2" data-tab="time">Time</button>
                     <button class="tab-button px-4 py-2" data-tab="hardware">Hardware</button>
-                    <button class="tab-button px-4 py-2" data-tab="location">Location</button>
-                    <button class="tab-button px-4 py-2" data-tab="weather">Weather</button>
                     <button class="tab-button px-4 py-2" data-tab="update">Update</button>
+                    <button class="tab-button px-4 py-2" data-tab="api-endpoints">API Endpoints</button>
                     <button class="tab-button px-4 py-2 hidden" data-tab="users" id="users-tab-button">Users</button>
                     <button class="tab-button px-4 py-2" data-tab="admin">Keys & Admin</button>
                 </div>
@@ -167,13 +255,132 @@
                     </div>
                 </div>
 
-                <!-- GPS Tab -->
-                <div id="tab-gps" class="tab-content">
+                <!-- Combined Map & Location Tab -->
+                <div id="tab-map-location" class="tab-content">
                     <div class="card p-4 h-[calc(100vh-12rem)] flex flex-col">
-                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="satellite" class="w-5 h-5 text-cyan-400"></i>GPS Data</h2>
-                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 p-4 flex-shrink-0" id="gps-data-grid"></div>
-                        <div class="flex-grow bg-gray-800 rounded-lg overflow-hidden mt-4">
-                            <iframe id="osm-map" class="w-full h-full border-0" loading="lazy" allowfullscreen src="about:blank"></iframe>
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="map" class="w-5 h-5 text-cyan-400"></i>Interactive Map & Location Data</h2>
+                        
+                        <!-- Map Container -->
+                        <div id="mapid" class="w-full flex-grow bg-gray-800 rounded-lg overflow-hidden mb-4"></div>
+
+                        <!-- Location Data Sections Below Map -->
+                        <div class="flex-shrink-0 space-y-6">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div class="card p-6">
+                                    <h3 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="satellite" class="w-5 h-5 text-cyan-400"></i>Current GPS Data</h3>
+                                    <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm" id="gps-data-grid">
+                                        <!-- GPS data will be populated here -->
+                                        <div class="col-span-2 md:col-span-3 lg:col-span-5"><div class="grid-item-label">Source</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Fix Type</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Latitude</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Longitude</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Altitude</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Speed</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Track</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Climb Rate</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Time (UTC)</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Satellites Used</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">Satellites In View</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">H. Error (m)</div><div class="grid-item-value">N/A</div></div>
+                                        <div class="card p-4"><div class="grid-item-label">V. Error (m)</div><div class="grid-item-value">N/A</div></div>
+                                    </div>
+                                    <button class="api-btn secondary w-full mt-4" onclick="window.globalApi.makeApiCall('/hardware/gps/fix', 'POST', null, 'api-output')"><i data-lucide="locate-fixed" class="w-4 h-4"></i>Fix GPS</button>
+                                </div>
+                                <div class="card p-6">
+                                    <h3 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="search" class="w-5 h-5 text-cyan-400"></i>Geocoding (Name to Coords)</h3>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="geocode-input" class="w-full" placeholder="e.g., London, UK">
+                                        <button class="api-btn" onclick="window.globalApi.geocodeLocation()">Find</button>
+                                    </div>
+                                    <div id="geocode-output" class="response-box hidden"></div>
+                                </div>
+                                <div class="card p-6">
+                                    <h3 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="map" class="w-5 h-5 text-cyan-400"></i>Reverse Geocoding</h3>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="reverse-geocode-lat" class="w-full" placeholder="Latitude (from GPS)">
+                                        <input type="text" id="reverse-geocode-lon" class="w-full" placeholder="Longitude (from GPS)">
+                                        <button class="api-btn" onclick="window.globalApi.reverseGeocodeLocation()">Find</button>
+                                    </div>
+                                    <div id="reverse-geocode-output" class="response-box hidden"></div>
+                                </div>
+                            </div>
+                            <div class="card p-6">
+                                <h3 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="compass" class="w-5 h-5 text-cyan-400"></i>Community POIs</h3>
+                                <div class="flex flex-col sm:flex-row gap-2 mb-3">
+                                    <input type="text" id="community-location-input" class="w-full" placeholder="City, Zipcode, or County (optional)">
+                                    <input type="text" id="community-types-input" class="w-full" placeholder="e.g., police,hospital (optional types)">
+                                    <input type="number" id="community-radius-input" class="w-24" value="10" min="1">
+                                    <select id="community-radius-unit-input" class="w-24">
+                                        <option value="km">km</option>
+                                        <option value="miles">miles</option>
+                                    </select>
+                                    <button class="api-btn" onclick="window.globalApi.getNearbyPois()">Find Nearby</button>
+                                </div>
+                                <p class="text-xs text-gray-500 mb-4">Uses current GPS location by default, or specified location. Enter optional comma-separated place types.</p>
+                                <div id="community-output" class="response-box hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Satellites Tab -->
+                <div id="tab-satellites" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="satellite" class="w-5 h-5 text-cyan-400"></i>Overhead Satellites</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <input type="text" id="satellite-lat-input" placeholder="Latitude (optional, defaults to GPS)" class="w-full">
+                            <input type="text" id="satellite-lon-input" placeholder="Longitude (optional, defaults to GPS)" class="w-full">
+                            <input type="text" id="satellite-alt-input" placeholder="Altitude in ft (optional, defaults to GPS)" class="w-full">
+                            <select id="satellite-radius-input" class="w-full">
+                                <option value="1000">1 km radius</option>
+                                <option value="5000">5 km radius</option>
+                                <option value="10000">10 km radius</option>
+                                <option value="25000">25 km radius</option>
+                                <option value="50000">50 km radius</option>
+                                <option value="100000">100 km radius</option>
+                            </select>
+                            <input type="text" id="satellite-search-input" placeholder="Search by name (optional)" class="w-full md:col-span-2">
+                        </div>
+                        <button class="api-btn w-full" onclick="window.globalApi.fetchOverheadSatellites()">Search Satellites</button>
+                        <div id="satellite-output" class="response-box hidden mt-4">
+                            <table class="w-full text-left text-xs satellite-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>NORAD ID</th>
+                                        <th>Azimuth (°)</th>
+                                        <th>Elevation (°)</th>
+                                        <th>Range (mi)</th>
+                                        <th>Velocity (mph)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="satellite-table-body">
+                                    <tr><td colspan="6" class="text-center text-gray-500 py-4">No satellites found or search not performed.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Space Weather Tab -->
+                <div id="tab-space-weather" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="sun" class="w-5 h-5 text-cyan-400"></i>Current Space Weather</h2>
+                        <button class="api-btn w-full mb-4" onclick="window.globalApi.fetchSpaceWeather()">Refresh Space Weather</button>
+                        <div id="space-weather-output" class="response-box min-h-[150px]">
+                            <p class="text-gray-500">Click "Refresh Space Weather" to load data.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Moon Info Tab -->
+                <div id="tab-moon-info" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="moon" class="w-5 h-5 text-cyan-400"></i>Moon Information</h2>
+                        <button class="api-btn w-full mb-4" onclick="window.globalApi.fetchMoonInfo()">Refresh Moon Info</button>
+                        <div id="moon-info-output" class="response-box min-h-[150px]">
+                            <p class="text-gray-500">Click "Refresh Moon Info" to load data.</p>
+                        </p>
                         </div>
                     </div>
                 </div>
@@ -189,14 +396,13 @@
                 <!-- Time Tab -->
                 <div id="tab-time" class="tab-content">
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div class="card p-6">
-                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="clock" class="w-5 h-5 text-cyan-400"></i>Time Synchronization Status</h2>
-                            <div class="space-y-3 text-sm" id="time-sync-content"></div>
-                        </div>
-                        <div class="card p-6">
-                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="activity" class="w-5 h-5 text-cyan-400"></i>Clock Performance</h2>
-                            <div class="space-y-4 text-sm" id="time-perf-content"></div>
-                        </div>
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="clock" class="w-5 h-5 text-cyan-400"></i>Time Synchronization Status</h2>
+                        <div class="space-y-3 text-sm" id="time-sync-content"></div>
+                        <button class="api-btn secondary w-full mt-4" onclick="window.globalApi.makeApiCall('/hardware/time/sync', 'POST', null, 'api-output')"><i data-lucide="clock-rewind" class="w-4 h-4"></i>Fix Time Sync</button>
+                    </div>
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="activity" class="w-5 h-5 text-cyan-400"></i>Clock Performance</h2>
+                        <div class="space-y-4 text-sm" id="time-perf-content"></div>
                     </div>
                 </div>
 
@@ -219,45 +425,34 @@
                     </div>
                 </div>
 
-                <!-- Location Services Tab -->
-                <div id="tab-location" class="tab-content">
-                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div class="card p-6">
-                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="search" class="w-5 h-5 text-cyan-400"></i>Geocoding (Name to Coords)</h2>
-                            <div class="flex gap-2">
-                                <input type="text" id="geocode-input" class="w-full" placeholder="e.g., London, UK">
-                                <button class="api-btn" onclick="window.globalApi.geocodeLocation()">Find</button>
-                            </div>
-                            <div id="geocode-output" class="response-box hidden"></div>
-                        </div>
-                         <div class="card p-6">
-                            <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="map" class="w-5 h-5 text-cyan-400"></i>Reverse Geocoding</h2>
-                            <div class="flex gap-2">
-                                <input type="text" id="reverse-geocode-lat" class="w-full" placeholder="Latitude (from GPS)">
-                                <input type="text" id="reverse-geocode-lon" class="w-full" placeholder="Longitude (from GPS)">
-                                <button class="api-btn" onclick="window.globalApi.reverseGeocodeLocation()">Find</button>
-                            </div>
-                            <div id="reverse-geocode-output" class="response-box hidden"></div>
-                        </div>
-                    </div>
-                     <div class="card p-6 mt-6">
-                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="compass" class="w-5 h-5 text-cyan-400"></i>Community POIs</h2>
-                        <div class="flex flex-col sm:flex-row gap-2 mb-3">
-                            <input type="text" id="community-types-input" class="w-full" placeholder="e.g., police,hospital (optional types)">
-                            <button class="api-btn" onclick="window.globalApi.getNearbyPois()">Find Nearby</button>
-                        </div>
-                        <p class="text-xs text-gray-500 mb-4">Uses current GPS location. Enter optional comma-separated place types.</p>
-                        <div id="community-output" class="response-box hidden"></div>
-                    </div>
-                </div>
-
                 <!-- Weather Services Tab -->
                 <div id="tab-weather" class="tab-content">
                     <div class="card p-6">
                         <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="cloud-sun" class="w-5 h-5 text-cyan-400"></i>External Weather Services</h2>
                         <div class="flex flex-col sm:flex-row gap-2"><input type="text" id="weather-location-input" class="w-full" placeholder="Enter a city or leave blank for GPS"><button class="api-btn" onclick="window.globalApi.fetchWeather()">Fetch Weather</button></div>
                         <p class="text-xs text-gray-500 mt-2 mb-4">Note: Services may fail if their API keys are not in the database.</p>
-                        <div id="weather-output-container" class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"></div>
+                        <div id="weather-output-container" class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <!-- Current Weather -->
+                            <div class="card p-4 flex flex-col items-center text-center">
+                                <h3 class="text-lg font-semibold text-gray-300 capitalize">Current</h3>
+                                <p class="text-gray-500 text-sm mt-2">No data yet.</p>
+                            </div>
+                            <!-- Hourly Forecast -->
+                            <div class="card p-4 flex flex-col items-center text-center">
+                                <h3 class="text-lg font-semibold text-gray-300 capitalize">Hourly Forecast</h3>
+                                <p class="text-gray-500 text-sm mt-2">No data yet.</p>
+                            </div>
+                            <!-- Daily Forecast -->
+                            <div class="card p-4 flex flex-col items-center text-center">
+                                <h3 class="text-lg font-semibold text-gray-300 capitalize">Daily Forecast</h3>
+                                <p class="text-gray-500 text-sm mt-2">No data yet.</p>
+                            </div>
+                            <!-- Weather Radar/Map Placeholder -->
+                            <div class="card p-4 flex flex-col items-center text-center col-span-full">
+                                <h3 class="text-lg font-semibold text-gray-300 capitalize">Weather Radar/Map</h3>
+                                <p class="text-gray-500 text-sm mt-2">Map integration requires specific API keys and services.</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -270,9 +465,9 @@
                            <table class="w-full text-left text-xs">
                                 <thead class="text-gray-400 uppercase">
                                     <tr>
-                                        <th class="p-2">File</th>
-                                        <th class="p-2">Version</th>
-                                        <th class="p-2">Status</th>
+                                        <th>File</th>
+                                        <th>Version</th>
+                                        <th>Status</th>
                                     </tr>
                                 </thead>
                                 <tbody id="file-info-table-body">
@@ -288,6 +483,28 @@
                         <p class="text-sm text-gray-500 mb-4">Click below to run a system update. This assumes the source files (e.g., from a recent <code>git pull</code>) are already on your Raspberry Pi. The API will restart after the update.</p>
                         <button id="trigger-system-update-btn" class="api-btn w-full"><i data-lucide="download" class="w-4 h-4"></i>Run System Update</button>
                         <div id="systemUpdateOutput" class="response-box hidden"></div>
+                    </div>
+                </div>
+
+                <!-- API Endpoints Tab (NEW) -->
+                <div id="tab-api-endpoints" class="tab-content space-y-6">
+                    <div class="card p-6">
+                        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4"><i data-lucide="plug" class="w-5 h-5 text-cyan-400"></i>Available API Endpoints</h2>
+                        <p class="text-sm text-gray-500 mb-4">This table lists all dynamically registered API endpoints.</p>
+                        <div class="response-box min-h-[300px] text-gray-300 overflow-x-auto">
+                            <table class="w-full text-left text-xs api-endpoints-table">
+                                <thead>
+                                    <tr>
+                                        <th class="p-2">Method(s)</th>
+                                        <th class="p-2">Path</th>
+                                        <th class="p-2">Description</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="api-endpoints-table-body">
+                                    <tr><td colspan="3" class="p-4 text-center">Click tab to load API endpoint info.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -396,14 +613,26 @@
         </div>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"
+        xintegrity="sha512-XQoYMqMTK8LvdxXYG4yH42wG2Fj0w0+fQ+R+S+T+U+V+W+X+Y+Z"
+        crossorigin=""></script>
     <script>
+    // Initialize window.globalApi at the very top level of the script
+    // This ensures it's an object before any properties are assigned to it.
+    window.globalApi = window.globalApi || {};
+
     document.addEventListener('DOMContentLoaded', () => {
 
         let pollingIntervalId = null;
         let pollingActive = false;
         let adminCredentials = { username: '', password: '' };
-        const API_BASE_URL = ''; // Keep this empty if running on the same domain as the backend
-        // Removed BATTERY_CAPACITY_MAH as it will come from the API now.
+        // IMPORTANT: Updated API_BASE_URL to point to your backend.
+        const API_BASE_URL = 'https://jengus.wifi.local.falcontechnix.com/api'; 
+
+        // Leaflet map variables
+        let mymap = null;
+        let gpsMarker = null;
+        let poiMarkers = null; // Feature group for POIs
 
         const el = (id) => document.getElementById(id);
 
@@ -420,11 +649,16 @@
             }, duration);
         };
         
-        const makeApiCall = async (endpoint, method = 'GET', body = null, outputElementId = 'api-output', silent = false) => {
+        // Modified makeApiCall to accept optional authCredentials
+        const makeApiCall = async (endpoint, method = 'GET', body = null, outputElementId = 'api-output', silent = false, authCredentialsOverride = null) => {
             const outputEl = el(outputElementId);
             const headers = { 'Content-Type': 'application/json' };
-            if (adminCredentials.username && adminCredentials.password) {
-                headers['Authorization'] = 'Basic ' + btoa(adminCredentials.username + ':' + adminCredentials.password);
+            
+            // Use provided authCredentialsOverride if available, otherwise use global adminCredentials
+            const currentCredentials = authCredentialsOverride || adminCredentials;
+
+            if (currentCredentials.username && currentCredentials.password) {
+                headers['Authorization'] = 'Basic ' + btoa(currentCredentials.username + ':' + currentCredentials.password);
             }
             try {
                 const response = await fetch(API_BASE_URL + endpoint, { method, headers, body: body ? JSON.stringify(body) : null });
@@ -432,10 +666,11 @@
                 let data = { error: `Invalid JSON response from server. Status: ${response.status}`, content: responseText };
                 try { data = JSON.parse(responseText); } catch (e) {}
                 
+                // Only log to api-output if not silent
                 if (outputEl && !silent) {
                     const logEntry = document.createElement('div');
                     const color = response.ok ? 'text-green-400' : 'text-red-400';
-                    logEntry.innerHTML = `<span class="text-gray-500">${new Date().toLocaleTimeString()}</span> ${method} ${endpoint} -> <span class="${color}">${response.status}</span><br><span class="pl-4">${JSON.stringify(data, null, 2)}</span>`;
+                    logEntry.innerHTML = `<span class="text-gray-500">${new Date().toLocaleTimeString('en-US', { hourCycle: 'h23' })}</span> ${method} ${endpoint} -> <span class="${color}">${response.status}</span><br><span class="pl-4">${JSON.stringify(data, null, 2)}</span>`;
                     outputEl.prepend(logEntry);
                     if(outputElementId !== 'api-output') outputEl.classList.remove('hidden');
                 }
@@ -447,202 +682,293 @@
                 return data;
             } catch (error) {
                 if (outputEl && !silent) {
-                     const logEntry = document.createElement('div');
-                     logEntry.innerHTML = `<span class="text-gray-500">${new Date().toLocaleTimeString()}</span> ${method} ${endpoint} -> <span class="text-red-400">Network Error</span><br><span class="pl-4">${error.message}</span>`;
-                     outputEl.prepend(logEntry);
+                    const logEntry = document.createElement('div');
+                    logEntry.innerHTML = `<span class="text-gray-500">${new Date().toLocaleTimeString('en-US', { hourCycle: 'h23' })}</span> ${method} ${endpoint} -> <span class="text-red-400">Network Error</span><br><span class="pl-4">${error.message}</span>`;
+                    outputEl.prepend(logEntry);
                 }
                 if (!silent) showMessage('error', `Network Error: ${error.message}`);
                 return { error: `Network Error: ${error.message}` };
             }
         };
         
-        const updateTabData = async (tabName) => {
-             const dataFetchers = {
-                'overview': updateOverviewData,
-                'gps': updateGpsTab,
-                'power': updatePowerTab, // This function is updated
-                'time': updateTimeTab,
-                'hardware': updateHardwareTab,
-                'update': updateFileTab,
-                'users': window.globalApi.listAllUsers // Ensure user list refreshes when tab is active
-             };
-             if (dataFetchers[tabName]) await dataFetchers[tabName]();
-        };
+        // --- Function Declarations (Hoisted) ---
+        // These functions are defined using 'function' keyword so they are hoisted
+        // and can be referenced anywhere in the script, including in `tabDataFetchers`
+        // before their full definition.
 
-        const updateAllData = async () => {
+        function updateSidebarData() {
+            // This function is called periodically. It should only update the sidebar.
+            // Other tabs are updated only when activated.
             if (!pollingActive) return;
-            const activeTab = document.querySelector('.tab-button.active').dataset.tab;
-            await updateTabData(activeTab); // Update current tab
-            await updateSidebarData(); // Always update sidebar
-        };
-        
-        // --- Sidebar & Overview Updaters ---
-        const updateSidebarData = async () => {
-            const [systemData, timeData, powerData] = await Promise.all([
+            Promise.all([
                 makeApiCall('/hardware/system-stats', 'GET', null, null, true),
                 makeApiCall('/hardware/time-sync', 'GET', null, null, true),
                 makeApiCall('/hardware/ups', 'GET', null, null, true) // Call the updated UPS API endpoint
-            ]);
-            if (systemData && !systemData.error) {
-                el('cpu-usage-val').textContent = `${systemData.cpu_usage_percent?.toFixed(1) || 'N/A'}%`;
-                el('cpu-temp-val').textContent = `${systemData.cpu_temperature_c?.toFixed(1) || 'N/A'}°C`;
-                el('memory-usage-val').textContent = `${systemData.memory_usage_percent?.toFixed(1) || 'N/A'}%`;
-                el('disk-usage-val').textContent = `${systemData.disk_usage?.percent || 'N/A'}%`;
-            }
-             if (timeData && !timeData.error) {
-                 el('time-offset').textContent = `${timeData.system_time_offset_s || 'N/A'} s`;
-             }
-            updateSidebarPower(powerData);
-        };
+            ]).then(([systemData, timeData, powerData]) => {
+                if (systemData && !systemData.error) {
+                    // Use optional chaining and nullish coalescing for display
+                    el('cpu-usage-val').textContent = `${systemData.cpu_usage_percent?.toFixed(1) || 'N/A'}%`;
+                    el('cpu-temp-val').textContent = `${cToF(systemData.cpu_temperature_c)?.toFixed(1) || 'N/A'}°F`;
+                    el('memory-usage-val').textContent = `${systemData.memory_usage_percent?.toFixed(1) || 'N/A'}%`;
+                    el('disk-usage-val').textContent = `${systemData.disk_usage?.percent || 'N/A'}%`;
+                }
+                if (timeData && !timeData.error) {
+                    el('time-offset').textContent = `${timeData.system_time_offset_s || 'N/A'} s`;
+                }
+                updateSidebarPower(powerData);
+            });
+        }
         
-        const updateOverviewData = async () => {
-            const [gpsData, powerData, systemData] = await Promise.all([
+        function updateOverviewData() {
+            Promise.all([
                 makeApiCall('/hardware/gps/best', 'GET', null, null, true),
                 makeApiCall('/hardware/ups', 'GET', null, null, true), // Call updated endpoint
                 makeApiCall('/hardware/system-stats', 'GET', null, null, true)
-            ]);
-            
-            el('overview-gps-content').innerHTML = `
-                <div class="flex justify-between text-gray-400"><span>Fix:</span><span class="font-mono text-white">${gpsData.fix_type || 'N/A'}</span></div>
-                <div class="flex justify-between text-gray-400"><span>Coords:</span><span class="font-mono text-white">${(gpsData.latitude && gpsData.longitude) ? `${gpsData.latitude.toFixed(4)}, ${gpsData.longitude.toFixed(4)}` : 'N/A'}</span></div>
-                <div class="flex justify-between text-gray-400"><span>Altitude:</span><span class="font-mono text-white">${gpsData.altitude_m ? `${gpsData.altitude_m.toFixed(1)} m` : 'N/A'}</span></div>`;
+            ]).then(([gpsData, powerData, systemData]) => {
+                el('overview-gps-content').innerHTML = `
+                    <div class="flex justify-between text-gray-400"><span>Fix:</span><span class="font-mono text-white">${gpsData.fix_type || 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Coords:</span><span class="font-mono text-white">${(gpsData.latitude && gpsData.longitude) ? `${gpsData.latitude.toFixed(4)}, ${gpsData.longitude.toFixed(4)}` : 'N/A'}</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Altitude:</span><span class="font-mono text-white">${mToFt(gpsData.altitude_m)?.toFixed(1) || 'N/A'} ft</span></div>`;
 
-            let powerContent;
-            if (powerData && powerData.status === "ok") {
-                const statusColor = getPowerStatusColor(powerData.status_text); // Use status_text from daemon
-                powerContent = `<div class="flex justify-between text-gray-400"><span>Voltage:</span><span class="font-mono text-white">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</span></div><div class="flex justify-between text-gray-400"><span>Current:</span><span class="font-mono text-white">${powerData.current_mA?.toFixed(1) || 'N/A'} mA</span></div><div class="flex justify-between text-gray-400"><span>Status:</span><span class="font-mono font-bold ${statusColor}">${powerData.status_text || 'N/A'}</span></div>`;
-            } else { powerContent = `<div class="text-red-400">Failed to load power data.</div>`; }
-            el('overview-power-content').innerHTML = powerContent;
+                let powerContent;
+                if (powerData && powerData.status === "ok") {
+                    const statusColor = getPowerStatusColor(powerData.status_text); // Use status_text from daemon
+                    powerContent = `<div class="flex justify-between text-gray-400"><span>Voltage:</span><span class="font-mono text-white">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</span></div><div class="flex justify-between text-gray-400"><span>Current:</span><span class="font-mono text-white">${powerData.current_mA?.toFixed(1) || 'N/A'} mA</span></div><div class="flex justify-between text-gray-400"><span>Status:</span><span class="font-mono font-bold ${statusColor}">${powerData.status_text || 'N/A'}</span></div>`;
+                } else { powerContent = `<div class="text-red-400">Failed to load power data.</div>`; }
+                el('overview-power-content').innerHTML = powerContent;
 
-            el('overview-system-content').innerHTML = `<div class="flex justify-between text-gray-400"><span>CPU Usage:</span><span class="font-mono text-white">${systemData.cpu_usage_percent?.toFixed(1) || 'N/A'}%</span></div><div class="flex justify-between text-gray-400"><span>Memory:</span><span class="font-mono text-white">${systemData.memory_usage_percent?.toFixed(1) || 'N/A'}%</span></div><div class="flex justify-between text-gray-400"><span>CPU Temp:</span><span class="font-mono text-white">${systemData.cpu_temperature_c?.toFixed(1) || 'N/A'}°C</span></div>`;
-        };
+                el('overview-system-content').innerHTML = `<div class="flex justify-between text-gray-400"><span>CPU Usage:</span><span class="font-mono text-white">${systemData.cpu_usage_percent?.toFixed(1) || 'N/A'}%</span></div><div class="flex justify-between text-gray-400"><span>Memory:</span><span class="font-mono text-white">${systemData.memory_usage_percent?.toFixed(1) || 'N/A'}%</span></div><div class="flex justify-between text-gray-400"><span>CPU Temp:</span><span class="font-mono text-white">${cToF(systemData.cpu_temperature_c)?.toFixed(1) || 'N/A'}°F</span></div>`;
+            });
+        }
 
-        // --- Tab Specific Updaters ---
-        const updateGpsTab = async () => {
-            const gpsData = await makeApiCall('/hardware/gps/best', 'GET', null, null, true);
-            const grid = el('gps-data-grid');
-            if (gpsData && !gpsData.error) {
-                grid.innerHTML = `
-                    <div class="col-span-2 md:col-span-3 lg:col-span-5"><div class="grid-item-label">Source</div><div class="grid-item-value">${gpsData.source || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Fix Type</div><div class="grid-item-value">${gpsData.fix_type || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Latitude</div><div class="grid-item-value">${gpsData.latitude?.toFixed(5) || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Longitude</div><div class="grid-item-value">${gpsData.longitude?.toFixed(5) || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Altitude</div><div class="grid-item-value">${gpsData.altitude_m?.toFixed(1) || 'N/A'} m</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Speed</div><div class="grid-item-value">${gpsData.speed_mps ? `${(gpsData.speed_mps * 3.6).toFixed(1)} km/h` : 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Track</div><div class="grid-item-value">${gpsData.track_deg?.toFixed(1) || 'N/A'}°</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Climb Rate</div><div class="grid-item-value">${gpsData.climb_mps ? `${gpsData.climb_mps.toFixed(1)} m/s` : 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Time (UTC)</div><div class="grid-item-value">${gpsData.time_utc ? new Date(gpsData.time_utc).toUTCString() : 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Satellites Used</div><div class="grid-item-value">${gpsData.satellites_used || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Satellites In View</div><div class="grid-item-value">${gpsData.satellites_in_view || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">H. Error (m)</div><div class="grid-item-value">${gpsData.error_horizontal_m?.toFixed(2) || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">V. Error (m)</div><div class="grid-item-value">${gpsData.error_vertical_m?.toFixed(2) || 'N/A'}</div></div>
-                `;
-                // Update OpenStreetMap iframe src if coordinates are available
-                if (gpsData.latitude && gpsData.longitude) {
-                    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${gpsData.longitude-0.01},${gpsData.latitude-0.01},${gpsData.longitude+0.01},${gpsData.latitude+0.01}&layer=mapnik&marker=${gpsData.latitude},${gpsData.longitude}`;
-                    el('osm-map').src = mapUrl;
-                } else {
-                    el('osm-map').src = 'about:blank'; // Clear map if no fix
-                }
-            } else {
-                grid.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">Failed to get GPS data: ${gpsData.error || 'Unknown error'}.</div>`;
-                el('osm-map').src = 'about:blank';
+        function updateMapAndLocationTab() {
+            // Initialize map if not already
+            if (!mymap) {
+                mymap = L.map('mapid').setView([0, 0], 2); // Default view
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                }).addTo(mymap);
+                poiMarkers = L.featureGroup().addTo(mymap); // Initialize POI layer
             }
-        };
+            // Ensure map is visible and correctly sized
+            mymap.invalidateSize();
 
-        const updatePowerTab = async () => {
-            const powerData = await makeApiCall('/hardware/ups', 'GET', null, null, true);
-            const container = el('ups-data-container');
-            if (powerData && powerData.status === "ok") {
-                const statusColor = getPowerStatusColor(powerData.status_text);
-                container.innerHTML = `
-                    <div class="card p-4"><div class="grid-item-label">Status</div><div class="grid-item-value ${statusColor}">${powerData.status_text || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Battery Voltage</div><div class="grid-item-value">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Bus Voltage</div><div class="grid-item-value">${powerData.bus_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Shunt Voltage</div><div class="grid-item-value">${powerData.shunt_voltage_mV?.toFixed(2) || 'N/A'} mV</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Current</div><div class="grid-item-value">${powerData.current_mA?.toFixed(2) || 'N/A'} mA</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Power</div><div class="grid-item-value">${powerData.power_W?.toFixed(2) || 'N/A'} mW</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Remaining Capacity</div><div class="grid-item-value">${powerData.remaining_mah?.toFixed(0) || 'N/A'} mAh</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Battery %</div><div class="grid-item-value">${powerData.battery_percentage?.toFixed(1) || 'N/A'}%</div></div>
-                    <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Full Charge</div><div class="grid-item-value">${powerData.last_full_charge ? new Date(powerData.last_full_charge).toLocaleString() : 'N/A'}</div></div>
-                    <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Update</div><div class="grid-item-value">${powerData.last_update ? new Date(powerData.last_update).toLocaleString() : 'N/A'}</div></div>
-                `;
-            } else {
-                container.innerHTML = `<div class="col-span-full text-red-400">Failed to load UPS data: ${powerData.error || 'Unknown error'}. Ensure ups_daemon is running.</div>`;
-            }
-        };
+            // POI markers are only cleared when a new POI search is performed, not on general tab refresh.
+            // This is handled by getNearbyPois, so no clearLayers() here.
 
-        const updateTimeTab = async () => {
-            const timeData = await makeApiCall('/hardware/time-sync', 'GET', null, null, true);
-            const syncContent = el('time-sync-content');
-            const perfContent = el('time-perf-content');
-            if (timeData && !timeData.error) {
-                syncContent.innerHTML = `
-                    <div class="flex justify-between text-gray-400"><span>Service Status:</span><span class="font-mono text-white">${timeData.service_status || 'N/A'}</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Leap Status:</span><span class="font-mono text-white">${timeData.leap_status || 'N/A'}</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Reference ID:</span><span class="font-mono text-white">${timeData.reference_id || 'N/A'}</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Stratum:</span><span class="font-mono text-white">${timeData.stratum || 'N/A'}</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Ref Time (UTC):</span><span class="font-mono text-white">${timeData.ref_time_utc || 'N/A'}</span></div>
-                `;
-                perfContent.innerHTML = `
-                    <div class="flex justify-between text-gray-400"><span>System Time Offset:</span><span class="font-mono text-white">${timeData.system_time_offset_s || 'N/A'} s</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Last Update Ago:</span><span class="font-mono text-white">${timeData.last_update_ago_s || 'N/A'} s</span></div>
-                    <div class="flex justify-between text-gray-400"><span>RMS Offset:</span><span class="font-mono text-white">${timeData.rms_offset_s || 'N/A'} s</span></div>
-                    <div class="flex justify-between text-gray-400"><span>Frequency Skew:</span><span class="font-mono text-white">${timeData.frequency_skew_ppm || 'N/A'} ppm</span></div>
-                    <div class="card p-4"><div class="grid-item-label">Residual Freq</div><div class="grid-item-value">${timeData.residual_freq_ppm || 'N/A'} ppm</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Root Delay</div><div class="grid-item-value">${timeData.root_delay_s || 'N/A'} s</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Root Dispersion</div><div class="grid-item-value">${timeData.root_dispersion_s || 'N/A'} s</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Update Interval</div><div class="grid-item-value">${timeData.update_interval_s || 'N/A'} s</div></div>
-                `;
-            } else {
-                syncContent.innerHTML = `<div class="text-red-400">Failed to load time sync data: ${timeData.error || 'Unknown error'}.</div>`;
-                perfContent.innerHTML = ``;
-            }
-        };
-        const updateHardwareTab = async () => {
-            const senseHatData = await makeApiCall('/hardware/sensehat/data', 'GET', null, null, true);
-            const senseHatContainer = el('sensehat-data-container');
-            if (senseHatData && !senseHatData.error) {
-                const sensors = senseHatData.sensors || {};
-                const orientation = sensors.orientation_degrees || {};
-                const accelerometer = sensors.accelerometer_raw || {};
-                senseHatContainer.innerHTML = `
-                    <div class="card p-4"><div class="grid-item-label">Raw Humidity Temp</div><div class="grid-item-value">${sensors.temperature_raw_humidity_c?.toFixed(2) || 'N/A'} °C</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Raw Pressure Temp</div><div class="grid-item-value">${sensors.temperature_raw_pressure_c?.toFixed(2) || 'N/A'} °C</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Corrected Temp</div><div class="grid-item-value">${sensors.temperature_corrected_c?.toFixed(2) || 'N/A'} °C</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Humidity</div><div class="grid-item-value">${sensors.humidity_percent?.toFixed(2) || 'N/A'} %</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Pressure</div><div class="grid-item-value">${sensors.pressure_hpa?.toFixed(2) || 'N/A'} hPa</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Pitch</div><div class="grid-item-value">${orientation.pitch?.toFixed(2) || 'N/A'}°</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Roll</div><div class="grid-item-value">${orientation.roll?.toFixed(2) || 'N/A'}°</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Yaw</div><div class="grid-item-value">${orientation.yaw?.toFixed(2) || 'N/A'}°</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Accel X</div><div class="grid-item-value">${accelerometer.x?.toFixed(2) || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Accel Y</div><div class="grid-item-value">${accelerometer.y?.toFixed(2) || 'N/A'}</div></div>
-                    <div class="card p-4"><div class="grid-item-label">Accel Z</div><div class="grid-item-value">${accelerometer.z?.toFixed(2) || 'N/A'}</div></div>
-                `;
-            } else {
-                senseHatContainer.innerHTML = `<div class="col-span-full text-center text-red-400 py-4">Sense HAT data unavailable: ${senseHatData.error || 'Unknown error'}.</div>`;
-            }
-        };
-        const updateFileTab = async () => {
-            const fileInfo = await makeApiCall('/system/file-info', 'GET', null, null, true);
-            const tableBody = el('file-info-table-body');
-            tableBody.innerHTML = ''; // Clear existing rows
+            makeApiCall('/hardware/gps/best', 'GET', null, null, true).then(gpsData => {
+                const grid = el('gps-data-grid');
+                let bounds = [];
 
-            if (fileInfo && Array.isArray(fileInfo)) {
-                fileInfo.forEach(file => {
-                    const row = document.createElement('tr');
-                    const statusClass = file.status === 'OK' ? 'status-ok' : file.status === 'OUTDATED' ? 'status-outdated' : 'status-missing';
-                    row.innerHTML = `
-                        <td class="p-2">${file.name}</td>
-                        <td class="p-2">${file.version}</td>
-                        <td class="p-2"><span class="${statusClass}">${file.exists ? 'Exists' : 'Missing'} / ${file.checksum_sha256 === 'N/A' ? 'N/A' : (file.status || '')}</span></td>
+                if (gpsData && !gpsData.error) {
+                    grid.innerHTML = `
+                        <div class="col-span-2 md:col-span-3 lg:col-span-5"><div class="grid-item-label">Source</div><div class="grid-item-value">${gpsData.source || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Fix Type</div><div class="grid-item-value">${gpsData.fix_type || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Latitude</div><div class="grid-item-value">${gpsData.latitude?.toFixed(5) || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Longitude</div><div class="grid-item-value">${gpsData.longitude?.toFixed(5) || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Altitude</div><div class="grid-item-value">${mToFt(gpsData.altitude_m)?.toFixed(1) || 'N/A'} ft</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Speed</div><div class="grid-item-value">${mpsToMph(gpsData.speed_mps)?.toFixed(1) || 'N/A'} mph</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Track</div><div class="grid-item-value">${gpsData.track_deg?.toFixed(1) || 'N/A'}°</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Climb Rate</div><div class="grid-item-value">${mToFt(gpsData.climb_mps)?.toFixed(1) || 'N/A'} ft/s</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Time (UTC)</div><div class="grid-item-value">${formatDateTime24hr(gpsData.time_utc)}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Satellites Used</div><div class="grid-item-value">${gpsData.satellites_used || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Satellites In View</div><div class="grid-item-value">${gpsData.satellites_in_view || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">H. Error (ft)</div><div class="grid-item-value">${mToFt(gpsData.error_horizontal_m)?.toFixed(2) || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">V. Error (ft)</div><div class="grid-item-value">${mToFt(gpsData.error_vertical_m)?.toFixed(2) || 'N/A'}</div></div>
                     `;
-                    tableBody.appendChild(row);
-                });
-            } else {
-                tableBody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-red-400">Failed to load file information.</td></tr>`;
-            }
-        };
+                    // Update map marker and view
+                    if (gpsData.latitude && gpsData.longitude) {
+                        const latlng = [gpsData.latitude, gpsData.longitude];
+                        if (gpsMarker) {
+                            gpsMarker.setLatLng(latlng);
+                        } else {
+                            gpsMarker = L.marker(latlng).addTo(mymap)
+                                .bindPopup(`<b>Current GPS</b><br>Lat: ${gpsData.latitude.toFixed(4)}<br>Lon: ${gpsData.longitude.toFixed(4)}`).openPopup();
+                        }
+                        bounds.push(latlng);
+                    } else if (gpsMarker) {
+                        mymap.removeLayer(gpsMarker);
+                        gpsMarker = null;
+                    }
+                } else {
+                    grid.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">Failed to get GPS data: ${gpsData.error || 'Unknown error'}.</div>`;
+                    if (gpsMarker) { mymap.removeLayer(gpsMarker); gpsMarker = null; }
+                }
+
+                // Fit map to bounds if any markers exist
+                if (bounds.length > 0) {
+                    mymap.fitBounds(bounds, { padding: [50, 50] });
+                } else {
+                    mymap.setView([0, 0], 2); // Reset view if no data
+                }
+            });
+        }
+
+        function updateSatellitesTab() {
+            // Populate lat/lon/alt inputs with current GPS data if available
+            makeApiCall('/hardware/gps/best', 'GET', null, null, true).then(gpsData => {
+                if (gpsData && !gpsData.error && gpsData.latitude && gpsData.longitude) {
+                    el('satellite-lat-input').value = gpsData.latitude.toFixed(5);
+                    el('satellite-lon-input').value = gpsData.longitude.toFixed(5);
+                    if (gpsData.altitude_m !== null) {
+                        el('satellite-alt-input').value = mToFt(gpsData.altitude_m).toFixed(1);
+                    }
+                }
+            });
+            // Initial search on tab load (optional, or rely on user clicking "Search")
+            // window.globalApi.fetchOverheadSatellites();
+        }
+
+        function updateSpaceWeatherTab() {
+            window.globalApi.fetchSpaceWeather();
+        }
+
+        function updateMoonInfoTab() {
+            window.globalApi.fetchMoonInfo();
+        }
+
+        function updatePowerTab() {
+            makeApiCall('/hardware/ups', 'GET', null, null, true).then(powerData => {
+                const container = el('ups-data-container');
+                if (powerData && powerData.status === "ok") {
+                    const statusColor = getPowerStatusColor(powerData.status_text);
+                    container.innerHTML = `
+                        <div class="card p-4"><div class="grid-item-label">Status</div><div class="grid-item-value ${statusColor}">${powerData.status_text || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Battery Voltage</div><div class="grid-item-value">${powerData.battery_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Bus Voltage</div><div class="grid-item-value">${powerData.bus_voltage_V?.toFixed(2) || 'N/A'} V</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Shunt Voltage</div><div class="grid-item-value">${powerData.shunt_voltage_mV?.toFixed(2) || 'N/A'} mV</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Current</div><div class="grid-item-value">${powerData.current_mA?.toFixed(2) || 'N/A'} mA</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Power</div><div class="grid-item-value">${powerData.power_W?.toFixed(2) || 'N/A'} mW</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Remaining Capacity</div><div class="grid-item-value">${powerData.remaining_mah?.toFixed(0) || 'N/A'} mAh</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Battery %</div><div class="grid-item-value">${powerData.battery_percentage?.toFixed(1) || 'N/A'}%</div></div>
+                        <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Full Charge</div><div class="grid-item-value">${formatDateTime24hr(powerData.last_full_charge)}</div></div>
+                        <div class="card p-4 col-span-full md:col-span-2 lg:col-span-2"><div class="grid-item-label">Last Update</div><div class="grid-item-value">${formatDateTime24hr(powerData.last_update)}</div></div>
+                    `;
+                } else {
+                    container.innerHTML = `<div class="col-span-full text-red-400">Failed to load UPS data: ${powerData.error || 'Unknown error'}. Ensure ups_daemon is running.</div>`;
+                }
+            });
+        }
+
+        function updateTimeTab() {
+            makeApiCall('/hardware/time-sync', 'GET', null, null, true).then(timeData => {
+                const syncContent = el('time-sync-content');
+                const perfContent = el('time-perf-content');
+                if (timeData && !timeData.error) {
+                    syncContent.innerHTML = `
+                        <div class="flex justify-between text-gray-400"><span>Service Status:</span><span class="font-mono text-white">${timeData.service_status || 'N/A'}</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Leap Status:</span><span class="font-mono text-white">${timeData.leap_status || 'N/A'}</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Reference ID:</span><span class="font-mono text-white">${timeData.reference_id || 'N/A'}</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Stratum:</span><span class="font-mono text-white">${timeData.stratum || 'N/A'}</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Ref Time (UTC):</span><span class="font-mono text-white">${formatDateTime24hr(timeData.ref_time_utc)}</span></div>
+                    `;
+                    perfContent.innerHTML = `
+                        <div class="flex justify-between text-gray-400"><span>System Time Offset:</span><span class="font-mono text-white">${timeData.system_time_offset_s || 'N/A'} s</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Last Update Ago:</span><span class="font-mono text-white">${timeData.last_update_ago_s || 'N/A'} s</span></div>
+                        <div class="flex justify-between text-gray-400"><span>RMS Offset:</span><span class="font-mono text-white">${timeData.rms_offset_s || 'N/A'} s</span></div>
+                        <div class="flex justify-between text-gray-400"><span>Frequency Skew:</span><span class="font-mono text-white">${timeData.frequency_skew_ppm || 'N/A'} ppm</span></div>
+                        <div class="card p-4"><div class="grid-item-label">Residual Freq</div><div class="grid-item-value">${timeData.residual_freq_ppm || 'N/A'} ppm</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Root Delay</div><div class="grid-item-value">${timeData.root_delay_s || 'N/A'} s</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Root Dispersion</div><div class="grid-item-value">${timeData.root_dispersion_s || 'N/A'} s</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Update Interval</div><div class="grid-item-value">${timeData.update_interval_s || 'N/A'} s</div></div>
+                    `;
+                } else {
+                    syncContent.innerHTML = `<div class="text-red-400">Failed to load time sync data: ${timeData.error || 'Unknown error'}.</div>`;
+                    perfContent.innerHTML = ``;
+                }
+            });
+        }
+
+        function updateHardwareTab() {
+            makeApiCall('/hardware/sensehat/data', 'GET', null, null, true).then(senseHatData => {
+                const senseHatContainer = el('sensehat-data-container');
+                if (senseHatData && !senseHatData.error) {
+                    const sensors = senseHatData.sensors || {};
+                    const orientation = sensors.orientation_degrees || {};
+                    const accelerometer = sensors.accelerometer_raw || {};
+                    senseHatContainer.innerHTML = `
+                        <div class="card p-4"><div class="grid-item-label">Raw Humidity Temp</div><div class="grid-item-value">${cToF(sensors.temperature_raw_humidity_c)?.toFixed(2) || 'N/A'} °F</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Raw Pressure Temp</div><div class="grid-item-value">${cToF(sensors.temperature_raw_pressure_c)?.toFixed(2) || 'N/A'} °F</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Corrected Temp</div><div class="grid-item-value">${cToF(sensors.temperature_corrected_c)?.toFixed(2) || 'N/A'} °F</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Humidity</div><div class="grid-item-value">${sensors.humidity_percent?.toFixed(2) || 'N/A'} %</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Pressure</div><div class="grid-item-value">${hPaToInHg(sensors.pressure_hpa)?.toFixed(2) || 'N/A'} inHg</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Pitch</div><div class="grid-item-value">${orientation.pitch?.toFixed(2) || 'N/A'}°</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Roll</div><div class="grid-item-value">${orientation.roll?.toFixed(2) || 'N/A'}°</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Yaw</div><div class="grid-item-value">${orientation.yaw?.toFixed(2) || 'N/A'}°</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Accel X</div><div class="grid-item-value">${accelerometer.x?.toFixed(2) || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Accel Y</div><div class="grid-item-value">${accelerometer.y?.toFixed(2) || 'N/A'}</div></div>
+                        <div class="card p-4"><div class="grid-item-label">Accel Z</div><div class="grid-item-value">${accelerometer.z?.toFixed(2) || 'N/A'}</div></div>
+                    `;
+                } else {
+                    senseHatContainer.innerHTML = `<div class="col-span-full text-center text-red-400 py-4">Sense HAT data unavailable: ${senseHatData.error || 'Unknown error'}.</div>`;
+                }
+            });
+        }
+
+        function updateFileTab() {
+            makeApiCall('/system/file-info', 'GET', null, null, true).then(fileInfo => {
+                const tableBody = el('file-info-table-body');
+                tableBody.innerHTML = ''; // Clear existing rows
+
+                if (fileInfo && Array.isArray(fileInfo)) {
+                    fileInfo.forEach(file => {
+                        const row = document.createElement('tr');
+                        let displayStatus = '';
+                        let statusClass = 'status-unknown'; // Default to unknown
+
+                        if (!file.exists) {
+                            displayStatus = 'Missing';
+                            statusClass = 'status-missing';
+                        } else {
+                            if (file.status === 'OK') {
+                                displayStatus = 'OK';
+                                statusClass = 'status-ok';
+                            } else if (file.status === 'OUTDATED') {
+                                displayStatus = 'Outdated';
+                                statusClass = 'status-outdated';
+                            } else {
+                                displayStatus = 'Exists / Unknown'; // Fallback for unexpected status
+                                statusClass = 'status-unknown';
+                            }
+                        }
+                        
+                        row.innerHTML = `
+                            <td class="p-2">${file.name}</td>
+                            <td class="p-2">${file.version}</td>
+                            <td class="p-2"><span class="${statusClass}">${displayStatus}</span></td>
+                        `;
+                        tableBody.appendChild(row);
+                    });
+                } else {
+                    tableBody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-red-400">Failed to load file information.</td></tr>`;
+                }
+            });
+        }
+
+        function updateApiEndpointsTab() {
+            makeApiCall('/routes_info', 'GET', null, null, true).then(endpoints => {
+                const tableBody = el('api-endpoints-table-body');
+                tableBody.innerHTML = ''; // Clear existing rows
+
+                if (endpoints && Array.isArray(endpoints)) {
+                    endpoints.forEach(endpoint => {
+                        const row = document.createElement('tr');
+                        const methodsHtml = endpoint.methods.map(method => 
+                            `<span class="method-badge method-${method}">${method}</span>`
+                        ).join(' ');
+
+                        row.innerHTML = `
+                            <td class="p-2">${methodsHtml}</td>
+                            <td class="p-2 font-mono text-sm text-cyan-200">${endpoint.path}</td>
+                            <td class="p-2 text-gray-400">${endpoint.description}</td>
+                        `;
+                        tableBody.appendChild(row);
+                    });
+                } else {
+                    tableBody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-red-400">Failed to load API endpoint information.</td></tr>`;
+                }
+            });
+        }
         
         const getPowerStatusColor = (status_text) => {
              if (status_text === 'CHARGING') return 'text-green-400';
@@ -680,9 +1006,51 @@
             }
         };
 
+        // Map of tab names to their data fetching/updating functions
+        const tabDataFetchers = {
+            'overview': updateOverviewData,
+            'map-location': updateMapAndLocationTab,
+            'satellites': updateSatellitesTab,
+            'weather': window.globalApi.fetchWeather,
+            'space-weather': updateSpaceWeatherTab,
+            'moon-info': updateMoonInfoTab,
+            'power': updatePowerTab,
+            'time': updateTimeTab,
+            'hardware': updateHardwareTab,
+            'update': updateFileTab,
+            'api-endpoints': updateApiEndpointsTab, // NEW: API Endpoints tab
+            'users': window.globalApi.listAllUsers,
+            // Admin tab data is handled by login/logout/key management functions directly
+        };
+
+        const updateAllData = () => {
+            // This function is called periodically. It should only update the sidebar.
+            // Other tabs are updated only when activated.
+            if (!pollingActive) return;
+            updateSidebarData(); // Call the hoisted function
+        };
+
+        // --- Unit Conversion Helpers ---
+        // Changed conversion functions to return null if input is null, instead of 'N/A'
+        const cToF = (c) => c !== null ? (c * 9/5) + 32 : null;
+        const mpsToMph = (mps) => mps !== null ? mps * 2.23694 : null;
+        const mToFt = (m) => m !== null ? m * 3.28084 : null;
+        const kmToMi = (km) => km !== null ? km * 0.621371 : null;
+        const hPaToInHg = (hpa) => hpa !== null ? hpa * 0.02953 : null;
+        const formatTime24hr = (dateString) => {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleTimeString('en-US', { hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        };
+        const formatDateTime24hr = (dateString) => {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleString('en-US', { hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        };
+
         // --- Admin & User Functions ---
-        // (Fully implemented versions of these functions would go here)
-        window.globalApi = window.globalApi || {}; // Ensure globalApi exists
+        // Expose all functions to window.globalApi so they can be called from onclick
+        window.globalApi.makeApiCall = makeApiCall;
         window.globalApi.listAllUsers = async () => {
             const users = await makeApiCall('/users', 'GET', null, null, true);
             const userListOutput = el('userListOutput');
@@ -738,6 +1106,14 @@
             const result = await makeApiCall(`/services/location-test?location=${encodeURIComponent(locationQuery)}`, 'GET', null, 'geocode-output');
             if (result.latitude && result.longitude) {
                 showMessage('success', `Geocoded: ${result.address}`);
+                if (mymap) {
+                    // Clear only POI markers, keep GPS marker
+                    if (poiMarkers) poiMarkers.clearLayers(); 
+                    const latlng = [result.latitude, result.longitude];
+                    L.marker(latlng).addTo(poiMarkers) // Add to POI layer
+                        .bindPopup(`<b>Geocoded:</b><br>${result.address}<br>Lat: ${result.latitude.toFixed(4)}<br>Lon: ${result.longitude.toFixed(4)}`).openPopup();
+                    mymap.setView(latlng, 13); // Center map on geocoded location
+                }
             }
         };
 
@@ -748,18 +1124,178 @@
             const result = await makeApiCall(`/services/location-test?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`, 'GET', null, 'reverse-geocode-output');
             if (result.address) {
                 showMessage('success', `Reverse Geocoded: ${result.address}`);
+                if (mymap) {
+                    // Clear only POI markers, keep GPS marker
+                    if (poiMarkers) poiMarkers.clearLayers();
+                    const latlng = [parseFloat(lat), parseFloat(lon)];
+                    L.marker(latlng).addTo(poiMarkers) // Add to POI layer
+                        .bindPopup(`<b>Reverse Geocoded:</b><br>${result.address}<br>Lat: ${latlng[0].toFixed(4)}<br>Lon: ${latlng[1].toFixed(4)}`).openPopup();
+                    mymap.setView(latlng, 13); // Center map on reverse geocoded location
+                }
             }
         };
 
+        // Define a color map for POI types
+        const POI_COLORS = {
+            'hospital': '#ef4444',    // Red
+            'police': '#3b82f6',      // Blue
+            'fire_station': '#f59e0b',// Orange
+            'post_office': '#22c55e', // Green
+            'prison': '#6b7280',      // Gray
+            'townhall': '#8b5cf6',    // Purple
+            'power_plant': '#14b8a6', // Teal
+            'water_tower': '#ec4899', // Pink
+            'water_works': '#06b6d4', // Cyan
+            'sewage_plant': '#6D28D9', // Deep Purple
+            'sewage_pump': '#BE185D',  // Rose
+            'substation': '#FDE047',   // Yellow
+            'landfill': '#84CC16',     // Lime Green
+            'recycling_centre': '#A78BFA', // Light Purple
+            'airport': '#FCA5A5',      // Light Red
+            'bus_station': '#818CF8',   // Indigo
+            'train_station': '#FDBA74', // Peach
+            'water_treatment_plant': '#22D3EE', // Aqua
+            'wastewater_treatment_plant': '#C084FC', // Lavender
+            'pumping_station_water': '#4ADE80', // Emerald
+            'combined_sewer_overflow': '#FB7185', // Ruby
+            'reservoir': '#38BDF8', // Sky Blue
+            'water_well': '#FACC15', // Gold
+            'transformer_station': '#E879F9', // Magenta
+            'wind_turbine': '#6EE7B7', // Mint
+            'solar_farm': '#FCD34D', // Amber
+            'courthouse': '#9CA3AF', // Gray
+            'government_office': '#6B7280', // Darker Gray
+            'default': '#94a3b8'      // Slate for unknown
+        };
+
         window.globalApi.getNearbyPois = async () => {
+            const locationQuery = el('community-location-input').value.trim();
             const types = el('community-types-input').value;
-            let endpoint = '/community/nearby';
+            const radius = el('community-radius-input').value;
+            const unit = el('community-radius-unit-input').value;
+
+            let lat = null;
+            let lon = null;
+            let resolvedLocation = null;
+
+            // Step 1: Resolve location (from input or GPS)
+            if (locationQuery) {
+                const geoResult = await makeApiCall(`/services/location-test?location=${encodeURIComponent(locationQuery)}`, 'GET', null, null, true);
+                if (geoResult && geoResult.latitude && geoResult.longitude) {
+                    lat = geoResult.latitude;
+                    lon = geoResult.longitude;
+                    resolvedLocation = geoResult;
+                    showMessage('info', `Searching around: ${geoResult.address || locationQuery}`);
+                } else {
+                    showMessage('error', `Could not find coordinates for "${locationQuery}". Please try a different query.`);
+                    return;
+                }
+            } else {
+                // Fallback to current GPS location
+                const gpsData = await makeApiCall('/hardware/gps/best', 'GET', null, null, true);
+                if (gpsData && !gpsData.error && gpsData.latitude && gpsData.longitude) {
+                    lat = gpsData.latitude;
+                    lon = gpsData.longitude;
+                    resolvedLocation = { source: "Current GPS", latitude: lat, longitude: lon };
+                    showMessage('info', `Searching around current GPS location.`);
+                } else {
+                    showMessage('error', `Could not get current GPS location. Please enter a location manually.`);
+                    return;
+                }
+            }
+
+            if (!lat || !lon) {
+                showMessage('error', 'Failed to determine a valid search location.');
+                return;
+            }
+
+            // Step 2: Fetch POIs using the determined location
+            let endpoint = `/community/nearby?lat=${lat}&lon=${lon}&radius=${encodeURIComponent(radius)}&unit=${encodeURIComponent(unit)}`;
             if (types) {
-                endpoint += `?types=${encodeURIComponent(types)}`;
+                endpoint += `&types=${encodeURIComponent(types)}`;
             }
             const result = await makeApiCall(endpoint, 'GET', null, 'community-output');
+            
             if (result.points_of_interest) {
                 showMessage('success', `Found ${Object.keys(result.points_of_interest).length} POI types.`);
+                if (mymap) { // Ensure map is initialized
+                    if (poiMarkers) {
+                        poiMarkers.clearLayers(); // Clear existing POI markers before adding new ones
+                    } else {
+                        poiMarkers = L.featureGroup().addTo(mymap);
+                    }
+
+                    let bounds = [];
+                    // Add the search origin to bounds
+                    if (lat && lon) {
+                        bounds.push([lat, lon]);
+                        // Add a temporary marker for the search origin if it's not the GPS marker
+                        if (!gpsMarker || gpsMarker.getLatLng().lat !== lat || gpsMarker.getLatLng().lng !== lon) {
+                             L.circleMarker([lat, lon], {
+                                radius: 5,
+                                color: '#22d3ee', // Accent color
+                                fillColor: '#22d3ee',
+                                fillOpacity: 0.7
+                            }).addTo(mymap).bindPopup(`<b>Search Origin:</b><br>${locationQuery || 'Current GPS'}`);
+                        }
+                    }
+                    
+
+                    let totalPois = 0;
+                    for (const type in result.points_of_interest) {
+                        const poisOfType = result.points_of_interest[type];
+                        if (Array.isArray(poisOfType)) {
+                            poisOfType.forEach(poi => {
+                                const lat = parseFloat(poi.latitude);
+                                const lon = parseFloat(poi.longitude);
+
+                                if (!isNaN(lat) && !isNaN(lon)) {
+                                    totalPois++;
+                                    const latlng = [lat, lon];
+                                    
+                                    // Get color for POI type
+                                    const markerColor = POI_COLORS[poi.poi_type] || POI_COLORS['default'];
+                                    
+                                    // Create a custom div icon with background color
+                                    const customIcon = L.divIcon({
+                                        className: 'poi-marker-icon',
+                                        html: `<div style="background-color: ${markerColor};">${poi.poi_type.charAt(0).toUpperCase()}</div>`,
+                                        iconSize: [24, 24],
+                                        iconAnchor: [12, 12], // Center the icon
+                                        tooltipAnchor: [0, -15], // Position tooltip above marker
+                                        popupAnchor: [0, -12] // Adjust popup position
+                                    });
+
+                                    let popupContent = `<b>${poi.name || 'POI'}</b><br>Type: ${poi.poi_type.replace(/_/g, ' ')}`;
+                                    if (poi.address && poi.address !== 'N/A') popupContent += `<br>Address: ${poi.address}`;
+                                    if (poi.phone && poi.phone !== 'N/A') popupContent += `<br>Phone: ${poi.phone}`;
+                                    if (poi.website && poi.website !== 'N/A') popupContent += `<br>Website: <a href="${poi.website}" target="_blank">${poi.website}</a>`;
+                                    if (poi.distance_km) popupContent += `<br>Distance: ${poi.distance_km.toFixed(2)} km`;
+
+                                    L.marker(latlng, { icon: customIcon })
+                                        .addTo(poiMarkers)
+                                        .bindPopup(popupContent)
+                                        .bindTooltip(poi.name || poi.poi_type.replace(/_/g, ' '), { // Permanent tooltip for name
+                                            permanent: true,
+                                            direction: 'top',
+                                            className: 'poi-tooltip',
+                                            offset: [0, -15] // Adjust offset to be above the marker
+                                        });
+                                    bounds.push(latlng);
+                                }
+                            });
+                        }
+                    }
+                    if (totalPois > 0 || bounds.length > 0) { // Fit to bounds if any POIs or just the search origin
+                        mymap.fitBounds(bounds, { padding: [50, 50] });
+                    } else if (gpsMarker) {
+                        mymap.setView(gpsMarker.getLatLng(), 13);
+                    } else {
+                        mymap.setView([0, 0], 2);
+                    }
+                }
+            } else {
+                showMessage('error', `Failed to fetch POIs: ${result.error || 'Unknown error'}.`);
             }
         };
 
@@ -775,29 +1311,88 @@
 
             if (result && result.weather_data) {
                 let successCount = 0;
+                // Current Weather
                 for (const serviceName in result.weather_data) {
                     const serviceData = result.weather_data[serviceName];
-                    const card = document.createElement('div');
-                    card.className = 'card p-4 flex flex-col items-center text-center';
-                    
-                    if (serviceData.error) {
-                        card.innerHTML = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3><p class="text-red-400 text-sm mt-2">Error: ${serviceData.error}</p>`;
-                        showMessage('error', `Weather fetch error for ${serviceName}: ${serviceData.error}`);
-                    } else if (serviceData.normalized_data && serviceData.normalized_data.current) {
+                    if (serviceData.normalized_data && serviceData.normalized_data.current) {
                         const current = serviceData.normalized_data.current;
                         const iconUrl = current.icon_url || `https://openweathermap.org/img/wn/${current.icon || '01d'}@2x.png`;
-                        card.innerHTML = `
-                            <h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3>
+                        const currentCard = document.createElement('div');
+                        currentCard.className = 'card p-4 flex flex-col items-center text-center';
+                        currentCard.innerHTML = `
+                            <h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName} Current</h3>
                             <img src="${iconUrl}" onerror="this.onerror=null;this.src='https://placehold.co/48x48/1f2937/f9fafb?text=N/A';" alt="Weather Icon" class="weather-card-icon">
-                            <p class="text-3xl font-bold text-white mt-2">${current.temperature_c?.toFixed(1) || 'N/A'}°C</p>
+                            <p class="text-3xl font-bold text-white mt-2">${(cToF(current.temperature_c) !== null ? cToF(current.temperature_c).toFixed(1) : 'N/A')}°F</p>
                             <p class="text-sm text-gray-400">${current.description || 'N/A'}</p>
+                            <p class="text-xs text-gray-500">Feels Like: ${(cToF(current.feels_like_c) !== null ? cToF(current.feels_like_c).toFixed(1) : 'N/A')}°F</p>
+                            <p class="text-xs text-gray-500">Humidity: ${current.humidity_percent?.toFixed(1) || 'N/A'}%</p>
+                            <p class="text-xs text-gray-500">Wind: ${(mpsToMph(current.wind_speed_mps) !== null ? mpsToMph(current.wind_speed_mps).toFixed(1) : 'N/A')} mph at ${current.wind_direction_deg || 'N/A'}°</p>
+                            <p class="text-xs text-gray-500">Pressure: ${(hPaToInHg(current.pressure_hpa) !== null ? hPaToInHg(current.pressure_hpa).toFixed(2) : 'N/A')} inHg</p>
                         `;
+                        container.appendChild(currentCard);
                         successCount++;
-                    } else {
-                         card.innerHTML = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName}</h3><p class="text-gray-500 text-sm mt-2">No current data.</p>`;
                     }
-                    container.appendChild(card);
                 }
+
+                // Hourly Forecast
+                for (const serviceName in result.weather_data) {
+                    const serviceData = result.weather_data[serviceName];
+                    if (serviceData.normalized_data && Array.isArray(serviceData.normalized_data.hourly) && serviceData.normalized_data.hourly.length > 0) {
+                        const hourlyCard = document.createElement('div');
+                        hourlyCard.className = 'card p-4 col-span-full';
+                        let hourlyHtml = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName} Hourly Forecast</h3><div class="flex overflow-x-auto py-2 space-x-4">`;
+                        serviceData.normalized_data.hourly.slice(0, 12).forEach(hour => { // Show next 12 hours
+                            const hourTime = new Date(hour.time_utc).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+                            const iconUrl = hour.icon_url || `https://openweathermap.org/img/wn/${hour.icon || '01d'}@2x.png`;
+                            hourlyHtml += `
+                                <div class="flex-shrink-0 text-center w-24">
+                                    <p class="text-sm text-gray-400">${hourTime}</p>
+                                    <img src="${iconUrl}" onerror="this.onerror=null;this.src='https://placehold.co/32x32/1f2937/f9fafb?text=N/A';" alt="Weather Icon" class="w-8 h-8 mx-auto">
+                                    <p class="text-md font-bold text-white">${(cToF(hour.temperature_c) !== null ? cToF(hour.temperature_c).toFixed(0) : 'N/A')}°F</p>
+                                    <p class="text-xs text-gray-500">${hour.description || ''}</p>
+                                </div>
+                            `;
+                        });
+                        hourlyHtml += `</div>`;
+                        hourlyCard.innerHTML = hourlyHtml;
+                        container.appendChild(hourlyCard);
+                    }
+                }
+
+                // Daily Forecast
+                for (const serviceName in result.weather_data) {
+                    const serviceData = result.weather_data[serviceName];
+                    if (serviceData.normalized_data && Array.isArray(serviceData.normalized_data.daily) && serviceData.normalized_data.daily.length > 0) {
+                        const dailyCard = document.createElement('div');
+                        dailyCard.className = 'card p-4 col-span-full';
+                        let dailyHtml = `<h3 class="text-lg font-semibold text-gray-300 capitalize">${serviceName} Daily Forecast</h3><div class="flex overflow-x-auto py-2 space-x-4">`;
+                        serviceData.normalized_data.daily.slice(0, 7).forEach(day => { // Show next 7 days
+                            const dayName = new Date(day.time_utc).toLocaleDateString('en-US', { weekday: 'short' });
+                            const iconUrl = day.icon_url || `https://openweathermap.org/img/wn/${day.icon || '01d'}@2x.png`;
+                            dailyHtml += `
+                                <div class="flex-shrink-0 text-center w-24">
+                                    <p class="text-sm text-gray-400">${dayName}</p>
+                                    <img src="${iconUrl}" onerror="this.onerror=null;this.src='https://placehold.co/32x32/1f2937/f9fafb?text=N/A';" alt="Weather Icon" class="w-8 h-8 mx-auto">
+                                    <p class="text-md font-bold text-white">${(cToF(day.temp_max_c) !== null ? cToF(day.temp_max_c).toFixed(0) : 'N/A')}°F / ${(cToF(day.temp_min_c) !== null ? cToF(day.temp_min_c).toFixed(0) : 'N/A')}°F</p>
+                                    <p class="text-xs text-gray-500">${day.description || ''}</p>
+                                </div>
+                            `;
+                        });
+                        dailyHtml += `</div>`;
+                        dailyCard.innerHTML = dailyHtml;
+                        container.appendChild(dailyCard);
+                    }
+                }
+
+                // Weather Radar/Map Placeholder (always present)
+                const radarCard = document.createElement('div');
+                radarCard.className = 'card p-4 flex flex-col items-center text-center col-span-full';
+                radarCard.innerHTML = `
+                    <h3 class="text-lg font-semibold text-gray-300 capitalize">Weather Radar/Map</h3>
+                    <p class="text-gray-500 text-sm mt-2">Map integration requires specific API keys and services.</p>
+                `;
+                container.appendChild(radarCard);
+
                 if (successCount > 0) {
                     showMessage('success', `Weather data fetched successfully for ${successCount} service(s).`);
                 }
@@ -864,20 +1459,39 @@
         const loginAdmin = async () => {
             const username = el('adminLoginUsername').value;
             const password = el('adminLoginPassword').value;
-            // Attempt to fetch a protected resource. A 401 indicates failure, 200 indicates success.
-            const result = await makeApiCall('/database/stats', 'GET', null, 'adminLoginOutput', true);
-            if (result.error && result.error.includes("Authentication Failed")) {
+            // Temporarily set credentials for this call to test authentication
+            const tempAdminCredentials = { username, password };
+            
+            // Attempt to fetch a protected resource, like /users, to verify login
+            const result = await makeApiCall('/users', 'GET', null, 'adminLoginOutput', true, tempAdminCredentials);
+            
+            if (result.error && (result.error.includes("Authentication Failed") || result.error.includes("HTTP Error 401"))) {
+                // This is the expected error for failed authentication
                 showMessage('error', 'Admin login failed. Invalid credentials.');
+                console.error("Login verification failed. Full API response:", result);
                 return false;
-            } else if (result.status === "ok") {
-                adminCredentials.username = username;
+            } else if (result.status === "ok" || (Array.isArray(result) && result.length >= 0)) { // Assuming /users returns an array on success
+                adminCredentials.username = username; // Persist credentials on success
                 adminCredentials.password = password;
                 showMessage('success', 'Admin login successful.');
                 updateAdminPanelState();
                 updateApiKeysList();
                 return true;
             } else {
-                showMessage('error', 'An unexpected error occurred during login verification.');
+                // Handle other unexpected successful responses or errors
+                console.error("Login verification failed. Full API response:", result);
+                let errorMessage = 'An unexpected error occurred during login verification.';
+                if (result.error) {
+                    errorMessage = `Login failed: ${result.error}`;
+                } else if (result.content) {
+                    try {
+                        const parsedContent = JSON.parse(result.content);
+                        errorMessage = `Login failed: ${JSON.stringify(parsedContent, null, 2)}`;
+                    } catch (e) {
+                        errorMessage = `Login failed: ${result.content.substring(0, 100)}${result.content.length > 100 ? '...' : ''}`;
+                    }
+                }
+                showMessage('error', errorMessage);
                 return false;
             }
         };
@@ -911,26 +1525,63 @@
             }
         };
 
+        // Predefined list of common API keys for the dropdown
+        const COMMON_API_KEYS = [
+            "OpenWeatherMap",
+            "AccuWeather",
+            "Windy.com",
+            "Google Maps",
+            "OpenCageData",
+            "Here Maps",
+            "Dark Sky",
+            "TomTom",
+            "Mapbox",
+            "Stripe",
+            "Twilio",
+            "SendGrid",
+            "AWS S3",
+            "Azure Blob Storage",
+            "OpenAI",
+            "Gemini API",
+            "GOOGLE_PLACES_API_KEY" // Added Google Places API Key
+        ];
+
         const updateApiKeysList = async () => {
             const keys = await makeApiCall('/keys', 'GET', null, null, true);
             const apiKeysOutput = el('apiKeysOutput');
             const externalKeyNameSelect = el('externalKeyNameSelect');
+            
+            // Clear existing options, but keep the default ones
             externalKeyNameSelect.innerHTML = '<option value="">-- Select or type key name --</option><option value="OTHER">-- Other (type below) --</option>';
 
+            const existingKeyNames = new Set();
+
+            // Add existing keys from backend first
             if (keys && Array.isArray(keys)) {
                 apiKeysOutput.innerHTML = `<pre>${JSON.stringify(keys, null, 2)}</pre>`;
                 keys.forEach(key => {
+                    existingKeyNames.add(key.key_name);
                     const option = document.createElement('option');
                     option.value = key.key_name;
-                    option.textContent = key.key_name + (key.is_internal ? ' (Internal)' : ''); 
+                    option.textContent = key.key_name + (key.is_internal ? ' (Internal)' : '');  
                     externalKeyNameSelect.appendChild(option);
                 });
             } else {
                 apiKeysOutput.innerHTML = `<div class="text-red-400">Failed to load API keys: ${keys.error || 'Unknown error'}.</div>`;
             }
+
+            // Add common API keys, avoiding duplicates
+            COMMON_API_KEYS.forEach(keyName => {
+                if (!existingKeyNames.has(keyName)) {
+                    const option = document.createElement('option');
+                    option.value = keyName;
+                    option.textContent = keyName;
+                    externalKeyNameSelect.appendChild(option);
+                }
+            });
         };
 
-        const storeOrUpdateKey = async () => {
+        window.globalApi.storeOrUpdateKey = async () => { // Exposed to window.globalApi
             let keyName = el('externalKeyNameSelect').value;
             if (keyName === 'OTHER') {
                 keyName = el('externalKeyNameOther').value;
@@ -947,7 +1598,7 @@
             el('externalKeyValue').value = '';
         };
 
-        const generateInternalKey = async () => {
+        window.globalApi.generateInternalKey = async () => { // Exposed to window.globalApi
             const keyName = el('internalKeyName').value;
             if (!keyName) {
                 showMessage('error', 'Name for the internal key is required.');
@@ -980,12 +1631,12 @@
             let newIconName;
             if (pollingActive) {
                 const interval = parseInt(el('poll-interval').value) * 1000 || 5000;
-                pollingIntervalId = setInterval(updateAllData, interval);
+                pollingIntervalId = setInterval(updateSidebarData, interval); // Only update sidebar data
                 btn.classList.add('bg-rose-600', 'hover:bg-rose-700');
                 btn.classList.remove('secondary');
                 textEl.textContent = 'Stop Refresh';
                 newIconName = 'pause-circle';
-                updateAllData();
+                updateSidebarData(); // Initial call
             } else {
                 clearInterval(pollingIntervalId);
                 btn.classList.remove('bg-rose-600', 'hover:bg-rose-700');
@@ -1009,6 +1660,33 @@
             // --- End Dynamic Lucide Icon Update ---
         };
 
+        // Function to poll API status after an update
+        const pollApiStatus = (maxAttempts = 15, intervalMs = 5000) => {
+            let attempts = 0;
+            const outputEl = el('systemUpdateOutput');
+            outputEl.innerHTML = `<p class="text-yellow-400">API update triggered. Checking API status... (Attempt ${attempts + 1}/${maxAttempts})</p>`;
+            outputEl.classList.remove('hidden');
+
+            const pollInterval = setInterval(async () => {
+                attempts++;
+                const status = await makeApiCall('/status', 'GET', null, null, true); // Silent call
+                
+                if (status && status.status === 'ok') {
+                    clearInterval(pollInterval);
+                    showMessage('success', 'API is back online! Refreshing page in 3 seconds...');
+                    outputEl.innerHTML = `<p class="text-green-400">API is back online!</p>`;
+                    setTimeout(() => location.reload(), 3000);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    showMessage('error', 'API did not come back online within expected time. Please check Raspberry Pi logs or manually reboot.', 0); // Permanent message
+                    outputEl.innerHTML = `<p class="text-red-400">API did not come back online. Please check your Raspberry Pi logs for errors or manually reboot the device.</p>`;
+                } else {
+                    outputEl.innerHTML = `<p class="text-yellow-400">API update triggered. Checking API status... (Attempt ${attempts + 1}/${maxAttempts})</p>`;
+                }
+            }, intervalMs);
+        };
+
+
         const init = async () => {
             // Initial call to lucide.createIcons() after the DOM is fully structured.
             // This processes all initial data-lucide attributes on the page.
@@ -1024,11 +1702,29 @@
         // --- Event Listeners ---
         el('tabs').addEventListener('click', e => {
             if (e.target.matches('.tab-button')) {
+                // Remove active class from current tab and content
                 document.querySelector('.tab-button.active').classList.remove('active');
+                document.querySelector('.tab-content.active').classList.remove('active');
+                
+                // Add active class to clicked tab and its content
                 e.target.classList.add('active');
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 el(`tab-${e.target.dataset.tab}`).classList.add('active');
-                updateTabData(e.target.dataset.tab);
+                
+                // Trigger data fetch for the newly active tab
+                const activeTabName = e.target.dataset.tab;
+                if (tabDataFetchers[activeTabName]) {
+                    tabDataFetchers[activeTabName]();
+                }
+
+                // Special handling for map tabs to invalidate size
+                if (activeTabName === 'map-location') {
+                    // Give Leaflet a moment to adjust to the new container size
+                    setTimeout(() => {
+                        if (mymap) {
+                            mymap.invalidateSize();
+                        }
+                    }, 100);
+                }
             }
         });
         
@@ -1050,7 +1746,8 @@
             showMessage('info', 'Initiating system update... This may take a few minutes and will restart API services. Check systemUpdateOutput box for details.', 0); // Indefinite message
             const result = await makeApiCall('/system/trigger-update', 'POST', null, 'systemUpdateOutput', false);
             if (result.message) {
-                showMessage('success', result.message + " The API will restart shortly. Please refresh the page in about 30-60 seconds.");
+                // Start polling API status after successful trigger
+                pollApiStatus();
             } else if (result.error) {
                 showMessage('error', `Update failed to start: ${result.error}`);
             }

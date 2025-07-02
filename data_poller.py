@@ -1,19 +1,17 @@
 # ==============================================================================
 # Pi Backend Data Poller
-# Version: 3.2.0 (UPS HAT Polling Removed)
+# Version: 3.5.0 (UPS Polling Removed)
 # ==============================================================================
 # This script runs as a persistent background service (systemd). It is
 # responsible for periodically polling various API endpoints (both internal
 # and external) and storing the collected data in the database.
 #
 # Changelog:
-# - v3.2.0: Removed `poll_ups_data` function and its scheduling.
-#           UPS HAT polling is now handled by the dedicated `ups_daemon.py` service.
-# - v3.1.0: Added `poll_ups_data` function and scheduled it to run every
-#           minute to log power status from the Waveshare UPS HAT.
-# - v3.0.0: Initial standalone service version.
-# ==============================================================================
-
+# - v3.4.0: POI Google Enrichment.
+# - v3.5.0: Removed UPS polling from this service. UPS data is now logged
+#           directly to the main database by `ups_status.py` when run in
+#           continuous mode (`-c`). This simplifies data flow and avoids redundancy.
+#
 import schedule
 import time
 import requests
@@ -21,6 +19,7 @@ import logging
 import json
 import sys
 import os
+from datetime import datetime, timedelta
 
 # Ensure the app's root directory is in the Python path
 # This allows us to import other modules from the application
@@ -34,8 +33,9 @@ from hardware_manager import HardwareManager
 import location_services
 import weather_services
 import astronomy_services
+import communtiy_services # Added for POI polling
 
-__version__ = "3.2.0"
+__version__ = "3.5.0"
 
 # --- Global Instances ---
 db_manager = None
@@ -139,8 +139,162 @@ def poll_gnss_data():
     except Exception as e:
         logging.error(f"Error polling GNSS data: {e}", exc_info=True)
 
+def poll_astronomy_data():
+    """Polls astronomy data (sun/moon, planets, meteor showers) and saves it."""
+    logging.info("Polling astronomy data...")
+    if not db_manager or not config_manager:
+        logging.error("Managers not initialized. Skipping astronomy poll.")
+        return
+    
+    try:
+        lat, lon, resolved_info = location_services.get_location_details(
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        if lat is None or lon is None:
+            logging.error(f"Could not get location for astronomy data: {resolved_info.get('error', 'Unknown')}")
+            return
 
-# Removed poll_ups_data function as it's now handled by ups_daemon.py
+        # Fetch all astronomy data
+        sky_data = astronomy_services.get_full_sky_data(
+            lat=lat, lon=lon,
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        
+        if sky_data and "error" not in sky_data:
+            # Store each type of astronomy data separately for easier querying
+            for data_type, data_content in sky_data.items():
+                if "error" not in data_content: # Only store if no error for that specific type
+                    db_manager.add_astronomy_data(
+                        data_type=data_type,
+                        location_lat=lat,
+                        location_lon=lon,
+                        data_json=data_content
+                    )
+                    logging.info(f"Successfully polled and stored astronomy data for type: {data_type}")
+                else:
+                    logging.warning(f"Error in astronomy data for type {data_type}: {data_content['error']}")
+        else:
+            logging.error(f"Failed to poll astronomy data: {sky_data.get('error', 'Unknown reason')}")
+
+    except Exception as e:
+        logging.error(f"Error polling astronomy data: {e}", exc_info=True)
+
+def poll_space_weather_data():
+    """Polls space weather data and saves it."""
+    logging.info("Polling space weather data...")
+    if not db_manager or not config_manager:
+        logging.error("Managers not initialized. Skipping space weather poll.")
+        return
+    
+    try:
+        # Assuming astronomy_services also handles space weather (or a new module is created)
+        # For now, let's assume get_full_sky_data might return it or we need a new service call
+        # In a real scenario, you'd likely have a dedicated space_weather_service.py
+        
+        # Placeholder for actual space weather API call
+        # For now, let's mock some data or call a simple endpoint if available
+        response = requests.get("https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json", timeout=10)
+        response.raise_for_status()
+        raw_data = response.json()
+
+        # Extract relevant fields (this will depend on the actual API response structure)
+        # Example: Kp index from a different NOAA endpoint
+        kp_response = requests.get("https://services.swpc.noaa.gov/json/planetary_k_index.json", timeout=10)
+        kp_response.raise_for_status()
+        kp_data = kp_response.json()
+        
+        latest_kp = None
+        if kp_data and isinstance(kp_data, list):
+            latest_kp_entry = kp_data[-1] if kp_data else None
+            if latest_kp_entry:
+                latest_kp = latest_kp_entry.get('kp')
+
+        # Dummy data for solar flare and geomagnetic storm levels if not in API
+        solar_flare_level = "C-class" # Example
+        geomagnetic_storm_level = "G1" # Example
+
+        # Use the latest timestamp from the data or current time
+        report_time_utc = datetime.now().isoformat() # Fallback
+
+        db_manager.add_space_weather_data(
+            report_time_utc=report_time_utc,
+            kp_index=latest_kp,
+            solar_flare_level=solar_flare_level,
+            geomagnetic_storm_level=geomagnetic_storm_level,
+            data_json={"kp_index": latest_kp, "solar_flare_level": solar_flare_level, "geomagnetic_storm_level": geomagnetic_storm_level, "raw_xrays": raw_data, "raw_kp": kp_data}
+        )
+        logging.info("Successfully polled and stored space weather data.")
+
+    except requests.RequestException as e:
+        logging.error(f"Error fetching space weather data from external API: {e}", exc_info=True)
+    except Exception as e:
+        logging.error(f"Error polling space weather data: {e}", exc_info=True)
+
+def poll_community_pois():
+    """Polls nearby community POIs and saves them, with Google enrichment."""
+    logging.info("Polling community POIs...")
+    if not db_manager or not config_manager:
+        logging.error("Managers not initialized. Skipping POI poll.")
+        return
+    
+    try:
+        lat, lon, resolved_info = location_services.get_location_details(
+            db_manager=db_manager,
+            config_manager=config_manager
+        )
+        if lat is None or lon is None:
+            logging.error(f"Could not get location for POI data: {resolved_info.get('error', 'Unknown')}")
+            return
+
+        # Get POI types and radius from config, or use sensible defaults
+        poi_types_str = config_manager.get('Polling', 'poi_types', fallback='hospital,police,fire_station,water_tower,water_works,sewage_plant,sewage_pump,substation,landfill')
+        poi_types = [t.strip() for t in poi_types_str.split(',') if t.strip()]
+        
+        poi_radius = config_manager.getint('Polling', 'poi_radius', fallback=10) # Default 10 km
+        poi_radius_unit = config_manager.get('Polling', 'poi_radius_unit', fallback='km')
+
+        # Pass db_manager to get_nearby_pois for Google enrichment
+        pois_data = communtiy_services.get_nearby_pois(
+            lat=lat, lon=lon,
+            db_manager=db_manager, # Pass db_manager for Google enrichment
+            search_radius=poi_radius,
+            radius_unit=poi_radius_unit,
+            types=poi_types
+        )
+
+        if pois_data:
+            for poi_type, pois_list in pois_data.items():
+                if isinstance(pois_list, list):
+                    for poi in pois_list:
+                        # Ensure OSM ID is an integer for the database schema
+                        # Use a combination of OSM ID and type for a robust unique key if OSM ID is missing
+                        osm_id = int(poi['osm_id']) if 'osm_id' in poi and str(poi['osm_id']).isdigit() else None
+                        
+                        if osm_id:
+                            db_manager.add_community_poi(
+                                osm_id=osm_id,
+                                poi_type=poi_type,
+                                name=poi.get('name'),
+                                latitude=poi.get('latitude'),
+                                longitude=poi.get('longitude'),
+                                address=poi.get('address'),
+                                phone=poi.get('phone'),
+                                website=poi.get('website'),
+                                details_json=poi.get('full_tags', {}) # Store full raw data from Overpass/Google
+                            )
+                            logging.info(f"Stored POI: {poi.get('name')} ({poi_type})")
+                        else:
+                            logging.warning(f"Skipping POI due to missing/invalid OSM ID: {poi.get('name')} (Type: {poi_type})")
+                elif isinstance(pois_list, dict) and "error" in pois_list:
+                    logging.error(f"Error fetching POIs for type {poi_type}: {pois_list['error']}")
+            logging.info("Finished polling community POIs.")
+        else:
+            logging.info("No community POIs found for the current location/criteria.")
+
+    except Exception as e:
+        logging.error(f"Error polling community POIs: {e}", exc_info=True)
 
 
 # --- Main Execution ---
@@ -173,7 +327,11 @@ def main():
         schedule.every(config_manager.getint("Polling", "system_stats_seconds", 60)).seconds.do(poll_system_stats)
         schedule.every(config_manager.getint("Polling", "weather_minutes", 15)).minutes.do(poll_weather_data)
         schedule.every(config_manager.getint("Polling", "gps_seconds", 10)).seconds.do(poll_gnss_data)
-        # Removed UPS polling job scheduling as it's now handled by ups_daemon.py
+        
+        # New polling jobs
+        schedule.every(config_manager.getint("Polling", "astronomy_days", 1)).days.do(poll_astronomy_data)
+        schedule.every(config_manager.getint("Polling", "space_weather_hours", 1)).hours.do(poll_space_weather_data)
+        schedule.every(config_manager.getint("Polling", "community_pois_days", 7)).days.do(poll_community_pois)
         
         logging.info("Polling jobs scheduled:")
         for job in schedule.get_jobs():
@@ -199,3 +357,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

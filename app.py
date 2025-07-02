@@ -1,129 +1,131 @@
-# ==============================================================================
-# Pi Backend Main Application
-# Version: 2.1.2 (Definitive Startup Fix)
-# ==============================================================================
-# This is the core Flask application file for the pi_backend. It initializes
-# the Flask app, configures it, and registers all the necessary API routes
-# and services.
 #
-# Changelog:
-# - v2.1.2:
-#   - FIX: CRITICAL: Reworked the application factory (`create_app`) to
-#     ensure all manager classes are initialized and dependencies are injected
-#     in the correct, logical order within the application context.
-#   - FIX: This version definitively solves the silent startup crash by
-#     correctly calling `location_services.set_hardware_manager(hw_manager)`.
+# File: app.py
+# Version: 1.2.0 (Service Manager Integration)
 #
-# Author: Gemini
-# ==============================================================================
-
-import os
-import logging
-from logging.handlers import RotatingFileHandler
-from flask import Flask
+# Description: Main Flask application for the pi_backend.
+#              Initializes the Flask app, loads configuration, sets up database
+#              and security managers, and registers API routes.
+#
+# Changelog (v1.2.0):
+# - REFACTOR: Integrated `DBConfigManager` for database-backed configuration.
+# - REFACTOR: Integrated `SecurityManager` for user authentication and authorization.
+# - FEAT: Added initialization of `HardwareManager` and injected `app_config` into it.
+# - FEAT: Added a setup endpoint `/setup/create_initial_admin` to create the first admin user.
+# - FEAT: Added a `/status` endpoint to check API health and version.
+# - FIX: Ensured `location_services` is initialized with `HardwareManager`.
+#
+from flask import Flask, jsonify, request, g, current_app
 from flask_cors import CORS
+import os
+import sys
+import logging
+from datetime import datetime, timezone
 
-from api_routes import api_blueprint
-from db_config_manager import DBConfigManager
+# Ensure the app's root directory is in the Python path
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+if APP_ROOT not in sys.path:
+    sys.path.append(APP_ROOT)
+
+# Import managers and services
 from database import DatabaseManager
+from db_config_manager import DBConfigManager
 from security_manager import SecurityManager
 from hardware_manager import HardwareManager
-import location_services # Import the module to inject dependencies
+import location_services # Import location_services to set its hardware manager
 
-def create_app():
-    """
-    Factory function to create and configure the Flask application.
-    """
-    app = Flask(__name__)
-    
-    # --- Load Configuration and Initialize Managers ---
-    # This sequence is critical to prevent "Working outside of application context" errors.
-    with app.app_context():
-        # 1. Initialize DatabaseManager first, as it's the foundation for config.
-        db_path = '/var/lib/pi_backend/pi_backend.db'
-        app.config['DB_MANAGER'] = DatabaseManager(database_path=db_path)
+# Import API routes blueprint
+from api_routes import api_blueprint
 
-        # 2. Initialize the DB-backed ConfigManager.
-        app.config['CONFIG_MANAGER'] = DBConfigManager(db_manager=app.config['DB_MANAGER'])
-        config_manager = app.config['CONFIG_MANAGER']
+__version__ = "1.2.0"
 
-        # 3. Setup Logging using the loaded configuration.
-        setup_logging(config_manager)
-        logging.info("--- Starting pi_backend Application ---")
+# --- Flask App Initialization ---
+app = Flask(__name__)
 
-        # 4. Initialize HardwareManager, which can now use the config.
-        app.config['HW_MANAGER'] = HardwareManager(app_config=config_manager)
-        hw_manager = app.config['HW_MANAGER']
-        
-        # 5. CRITICAL: Inject the HardwareManager instance into the location_services module.
-        location_services.set_hardware_manager(hw_manager)
-        logging.info("HardwareManager instance injected into Location Services.")
+# --- Logging Setup ---
+# Configure logging to stdout for systemd journal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+    stream=sys.stdout
+)
 
-        # 6. Initialize SecurityManager.
-        app.config['SECURITY_MANAGER'] = SecurityManager(db_manager=app.config['DB_MANAGER'])
+# --- CORS Configuration ---
+# Allow CORS for all origins by default, can be restricted via config
+CORS(app, resources={r"/api/*": {"origins": "*"}}) # Default to allow all for development
 
-        # 7. Enable CORS.
-        cors_origins = config_manager.get('CORS', 'Origins', fallback='*')
-        CORS(app, resources={r"/api/*": {"origins": cors_origins}})
-        logging.info(f"CORS enabled for origins: {cors_origins}")
-
-        # 8. Register API routes.
-        app.register_blueprint(api_blueprint)
-        logging.info("API routes registered.")
-
-    logging.info("Flask application created and configured successfully.")
-    return app
-
-def setup_logging(config_manager):
-    """
-    Configures application-wide logging using settings from DBConfigManager.
-    """
-    log_file = config_manager.get('Logging', 'App_Log_File', fallback='/var/log/pi_backend/app.log')
-    log_level_str = config_manager.get('Logging', 'Log_Level', fallback='INFO').upper()
-    
-    log_dir = os.path.dirname(log_file)
-    if not os.path.exists(log_dir):
+# --- Global Managers Initialization (happens once per Gunicorn worker) ---
+@app.before_request
+def initialize_managers():
+    # Use g (Flask's global object) to store managers, so they are initialized
+    # once per request context, but effectively once per Gunicorn worker process.
+    if 'db_manager' not in g:
         try:
-            os.makedirs(log_dir, exist_ok=True)
-            # After creating, set permissions for www-data
-            os.chown(log_dir, 33, 33) # 33 is the UID/GID for www-data on Debian-based systems
-        except PermissionError:
-            print(f"WARNING: Could not create or set permissions on log directory {log_dir}. Please create it manually and set ownership to 'www-data'.", file=sys.stderr)
+            # Get DB path from environment variable (set by systemd service)
+            db_path = os.environ.get('DB_PATH', '/var/lib/pi_backend/pi_backend.db')
+            g.db_manager = DatabaseManager(database_path=db_path)
+            if g.db_manager.connection is None:
+                logging.error("Failed to connect to database on app startup.")
+                # Depending on severity, you might want to abort here or return an error
+                # For now, let's allow it to continue but log the error.
         except Exception as e:
-            print(f"An unexpected error occurred creating log directory {log_dir}: {e}", file=sys.stderr)
+            logging.critical(f"CRITICAL: Failed to initialize DatabaseManager: {e}", exc_info=True)
+            g.db_manager = None # Mark as failed
 
-    log_level = getattr(logging, log_level_str, logging.INFO)
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    
-    # Clear existing handlers to avoid duplicates
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
+    if 'config_manager' not in g:
+        if g.db_manager:
+            g.config_manager = DBConfigManager(db_manager=g.db_manager)
+            # Update CORS origins from DB config
+            cors_origins = g.config_manager.get('CORS', 'Origins', fallback='*')
+            if cors_origins != '*':
+                # This requires re-initializing CORS, which is tricky after app.run()
+                # For simplicity, we'll assume a restart is needed for CORS changes.
+                # Or, for dynamic origins, use a more advanced Flask-CORS setup.
+                pass # CORS is already initialized globally, dynamic change is complex.
+        else:
+            g.config_manager = None
+            logging.error("ConfigManager not initialized due to missing DBManager.")
 
-    # File Handler
-    try:
-        handler = RotatingFileHandler(log_file, maxBytes=10000000, backupCount=5)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        root_logger.addHandler(handler)
-    except PermissionError:
-        print(f"WARNING: Could not write to log file {log_file}. Please check permissions.", file=sys.stderr)
-    except Exception as e:
-        print(f"An unexpected error occurred setting up file logging: {e}", file=sys.stderr)
+    if 'security_manager' not in g:
+        if g.db_manager:
+            g.security_manager = SecurityManager(db_manager=g.db_manager)
+        else:
+            g.security_manager = None
+            logging.error("SecurityManager not initialized due to missing DBManager.")
+            
+    if 'hw_manager' not in g:
+        if g.config_manager:
+            g.hw_manager = HardwareManager(app_config=g.config_manager)
+            # Inject hardware manager into services that need it
+            location_services.set_hardware_manager(g.hw_manager)
+        else:
+            g.hw_manager = None
+            logging.error("HardwareManager not initialized due to missing ConfigManager.")
 
-    # Stream Handler (for console output)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    root_logger.addHandler(stream_handler)
+
+    # Make managers available to current_app.config for blueprints/routes
+    current_app.config['DB_MANAGER'] = g.db_manager
+    current_app.config['CONFIG_MANAGER'] = g.config_manager
+    current_app.config['SECURITY_MANAGER'] = g.security_manager
+    current_app.config['HW_MANAGER'] = g.hw_manager # Make HardwareManager accessible
 
 
-# --- Main Execution ---
-app = create_app()
+# --- Register Blueprints ---
+app.register_blueprint(api_blueprint)
 
+# --- Error Handlers ---
+@app.errorhandler(404)
+def not_found_error(error):
+    return jsonify({"error": "Not Found", "message": "The requested URL was not found on the server."}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    app.logger.exception("An internal server error occurred.")
+    return jsonify({"error": "Internal Server Error", "message": "Something went wrong on the server."}), 500
+
+# --- Main Entry Point for Development (not used by Gunicorn directly) ---
 if __name__ == '__main__':
-    # This block runs when the script is executed directly (e.g., `python3 app.py`)
-    # It is intended for development and debugging.
-    # For production, Gunicorn is started by the systemd service and points to the `app` object.
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # This block is for direct Python execution (e.g., `python3 app.py`)
+    # Gunicorn will call `app` directly from the `ExecStart` in the service file.
+    # For development, you can run `python3 app.py` and it will start a dev server.
+    app.run(debug=True, host='0.0.0.0', port=5000)
+

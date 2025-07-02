@@ -1,236 +1,274 @@
-pi_backend
-Version: 2.2.0
+π-Backend: The Raspberry Pi Command Center 🚀
+Version: 2.0.10
 
-Project Overview
-This project is a comprehensive Python backend designed to run on a Raspberry Pi. It provides a robust API server built with Flask and includes a persistent background service for periodic data collection. It is designed to be the central API and data-logging service for any number of frontend applications.
+⚡️ Quick Install (One-Liner)
+Get your π-Backend up and running with a single command. This will download the installer and guide you through the setup. Always review scripts before running them with sudo!
 
-Core Features
-RESTful API Server: Provides endpoints for real-time data and control under the /api/ path.
+curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -
 
-Background Data Polling Service: A systemd service that runs on boot, periodically fetches data from the API, and stores it in the local database.
+Overview
+The π-Backend is a comprehensive, self-contained Python backend designed specifically for Raspberry Pi devices. It transforms your Pi into a powerful command center, providing a robust API server, continuous data logging, and seamless hardware integration. It's built as a flexible foundation for various frontend applications, from personal dashboards to IoT monitoring systems.
 
-Configurable Polling: Polling frequencies for different data points (GNSS, weather, etc.) can be easily changed in a .ini file without touching the code.
+🌟 Key Features
+RESTful API Server (Flask + Gunicorn): Exposes a secure, well-documented API for real-time data access and hardware control.
 
-Hardware Interfacing: Real-time data and control for the Sense HAT, GNSS (via gpsd or UART), Bluetooth, and LTE Modems (via GPIO and Serial).
+Intelligent Data Polling Service: A persistent systemd service that intelligently polls various internal and external API endpoints (including weather, astronomy, and community POIs) at configurable intervals, storing data directly into a local SQLite database.
 
-Installer & Updater: A comprehensive setup.sh script automates installation, updates, and service management.
+Smart Polling: Configurable frequencies to avoid over-polling infrequently changing data (e.g., daily for moon data, hourly for space weather, weekly for POIs).
 
-Secure API Key Management: Uses a permission-restricted API.keys file and provides an endpoint (/api/keys) to update keys securely from a frontend UI.
+Comprehensive Hardware Interfacing
 
-The Data Poller Service
-A key feature of this backend is the pi_backend_poller service. This is a Python script that runs continuously in the background and is managed by systemd, ensuring it starts automatically on boot.
+GNSS (GPS): Real-time position, velocity, and satellite data via gpsd.
 
-Its purpose is to automatically collect time-series data without requiring a frontend to be active. It calls its own API (e.g., /api/hardware/gps) and stores the JSON response in a dedicated polled_data table in the database, along with a timestamp and data source.
+Waveshare UPS HAT: Detailed battery metrics (voltage, current, percentage, status) and power events (charging/discharging, plugged/unplugged) logged continuously via ups_status.py directly to the main database.
 
-Configuring the Poller
-You can change how often data is collected by editing the configuration file.
+Sense HAT: Environmental sensors (temperature, humidity, pressure) and joystick input.
 
-Example using the default path:
-sudo nano /var/www/pi_backend/poller_config.ini
+LTE Modems (e.g., A7670E): Network information, signal quality, and flight mode control.
 
-The file contents are simple:
+Bluetooth: Device scanning capabilities.
 
-[Frequencies]
+Robust Data Storage (SQLite): All collected data, system logs, and configuration settings are stored in a local SQLite database, ensuring persistence and easy access.
 
-Polling intervals. Do not use quotes.
-weather_minutes = 10
-climate_days = 7
-gps_seconds = 10
+Enhanced Community POI Data: Fetches and aggregates Points of Interest from OpenStreetMap, with intelligent data enrichment (phone numbers, websites, precise addresses) using Google Places API (requires API key). Includes a wide range of infrastructure types (water, sewage, power, government, emergency services).
 
-Simply change the numbers and save the file. Then, restart the service for the changes to take effect:
-sudo systemctl restart pi_backend_poller.service
+Dynamic API Endpoint Documentation: A dedicated API endpoint (/api/routes_info) exposes a live, machine-readable list of all available API routes, their methods, and descriptions.
 
-Setup, Updates, and Service Management
+Secure User & API Key Management: Database-backed user authentication (admin/user roles) and secure storage for external API keys.
+
+Automated Installer & Updater: A powerful Python setup.py script automates initial installation, updates, dependency management, service setup, and Apache configuration (including SSL with Certbot).
+
+Web-Based Dashboard: A simple HTML/JavaScript test page (index.html) provides a live view of system status, sensor data, and interactive API testing.
+
+Apache Web Server Integration: Configures Apache for secure hosting, including HTTPS (with Let's Encrypt), static file serving from a dedicated secure web root, and reverse proxying API calls to the Flask API.
+
+🏛️ Architecture
+The π-Backend follows a modular and layered architecture:
+
+Hardware Layer: Direct interaction with Raspberry Pi GPIO, I2C, serial ports, and system utilities (e.g., gpsd, chrony).
+
+Modules Layer (pi_backend/modules/): Python classes encapsulating specific hardware components (e.g., A7670E.py, sense_hat.py, ina219.py).
+
+Services Layer (pi_backend/): Python modules providing high-level functionalities by interacting with hardware modules and external APIs (e.g., location_services.py, weather_services.py, astronomy_services.py, communtiy_services.py).
+
+Data Layer (pi_backend/database.py, pi_backend/db_config_manager.py): Manages SQLite database interactions for data logging, configuration, and user/API key management.
+
+API Layer (pi_backend/app.py, pi_backend/api_routes.py): A Flask application served by Gunicorn, exposing RESTful endpoints.
+
+System Services: systemd manages long-running processes like the Flask API (pi_backend_api.service), the data poller (pi_backend_poller.service), and GPS initialization (a7670e-gps-init.service).
+
+Web Server (Apache): Handles incoming HTTP/HTTPS requests, serves the static dashboard (index.html), and reverse proxies API calls to Gunicorn.
+
++-------------------+       +-------------------+       +-------------------+
+|     Frontend      | <---> | Apache Web Server | <---> |  Gunicorn/Flask   |
+| (Browser/App)     |       | (HTTPS/Proxy)     |       |   (pi_backend_api)|
++-------------------+       +-------------------+       +---------|---------+
+                                                                    |
+                                                                    v
+                                                          +---------|---------+
+                                                          |  API Endpoints    |
+                                                          | (`api_routes.py`) |
+                                                          +---------|---------+
+                                                                    |
+                                        +---------------------------+---------------------------+
+                                        |                           |                           |
+                                        v                           v                           v
+                              +--------------------+      +--------------------+      +--------------------+
+                              |  Service Logic     |      |  Data Poller       |      |  Hardware Managers |
+                              | (`weather_services`)|      | (`data_poller.py`) |      | (`hardware_manager`)|
+                              | (`communtiy_services`)|      | (Systemd Service)  |      | (`A7670E`, `SenseHAT`)|
+                              +----------|---------+      +----------|---------+      +----------|---------+
+                                         |                           |                           |
+                                         v                           v                           v
+                                +-----------------------------------------------------------------+
+                                |                     SQLite Database (`pi_backend.db`)         |
+                                | (Sensor Data, Location, POIs, UPS Metrics, Config, Users, Keys) |
+                                +-----------------------------------------------------------------+
+
+🚀 Quick Start (One-Liner)
+The quickest way to get started is using the one-liner. This command will:
+
+Download the setup.py script.
+
+Execute it with sudo python3.
+
+The setup.py script will then:
+
+Install all necessary system dependencies (Python packages, Apache, gpsd, chrony, etc.).
+
+Set up required directories and permissions.
+
+Configure gpsd and chrony for GPS time synchronization.
+
+Deploy all backend Python files and the index.html dashboard.
+
+Initialize the SQLite database.
+
+Prompt you for essential configurations like creating the initial admin user, setting up SSL (with Certbot), and entering 3rd-party API keys (e.g., OpenWeatherMap, Google Places).
+
+Install and enable systemd services for the API and data poller.
+
+Configure Apache for secure web serving and API proxying.
+
+Run a final API connectivity test.
+
+curl -sL https://raw.githubusercontent.com/sworrl/pi_backend/main/setup.py | sudo python3 -
+
+Important: After the script completes, a reboot is highly recommended (sudo reboot) to ensure all system changes (like group memberships and time synchronization services) take full effect.
+
+🛠️ Installation Guide
 Prerequisites
-A Raspberry Pi running a recent version of Raspberry Pi OS.
+A Raspberry Pi (Raspberry Pi OS Lite or Desktop recommended).
 
 An active internet connection.
 
-Step 1: Download and Run the Script
-Get the pi_backend project files onto your Raspberry Pi. Then, run the interactive installer.
+Basic Linux command-line familiarity.
 
-cd /path/to/pi_backend-main/
-chmod +x setup.sh
-./setup.sh
+Manual Installation Steps
+If you prefer to manually control the installation process:
 
-The script will present a menu:
+Clone the Repository:
 
-Install New Backend: For a fresh installation.
+git clone https://github.com/sworrl/pi_backend.git
+cd pi_backend
 
-Update Existing Backend: Updates the application files while preserving your data and keys.
+Make the Setup Script Executable:
 
-Install/Update Data Poller Service: Use this after an initial install or update to set up the background service.
+chmod +x setup.py
 
-Quit
+Run the Setup Script:
 
-Step 2: CRITICAL - Configure API Keys
-After installation, you must edit the API.keys file.
+sudo ./setup.py
 
-sudo nano /var/www/pi_backend/API.keys
+The script is interactive. Follow the prompts carefully. It will guide you through:
 
-Fill in the values for "YOUR_KEY_HERE". The GEMINI_API_KEY can also be set from a frontend UI.
+Installing system dependencies.
 
-Running the Backend Server
-For testing, you can run the app manually. For production, you should run it as a systemd service.
+Setting up directories and permissions.
 
-Navigate to your installation directory
-cd /var/www/pi_backend/
-python3 app.py
+Configuring GPSD and Chrony.
 
-API Endpoint Guide
-All API calls should be made to relative paths starting with /api/.
+Deploying application files.
 
-Status and Configuration
-Method
+Crucially, it will prompt you to create the initial admin user, configure SSL, and enter 3rd-party API keys.
 
-Endpoint
+Installing systemd services.
 
-Request Body
+Configuring Apache.
 
-Description
+Initial Setup & Configuration Prompts
+During the first-time installation, setup.py will prompt you for:
 
-GET
+Database Path: Default is /var/lib/pi_backend/pi_backend.db.
 
-/api/version
+Initial Admin Password: You must create an admin user for security.
 
-(none)
+SSL Certificate: Option to obtain a free Let's Encrypt SSL certificate for your domain (highly recommended for secure access).
 
-Returns the version of the running backend, e.g., {"version": "2.2.0"}.
+WebSDR Proxy: Option to enable a reverse proxy for a local WebSDR instance (if you run one).
 
-GET
+3rd-Party API Keys: The script will check for and prompt you to enter keys for services like OpenWeatherMap, Windy, AccuWeather, and Google Places API. These are crucial for external data fetching.
 
-/api/status
+Updating Your Backend
+To update your π-Backend to the latest version while preserving your configurations and data:
 
-(none)
+Navigate to your pi_backend source directory:
 
-A simple, lightweight endpoint to check if the API is running.
+cd /path/to/your/pi_backend  # e.g., /home/pi/pi_backend
 
-POST
+Pull the latest changes from GitHub:
 
-/api/keys
+git pull
 
-{ "key_name": "GEMINI_API_KEY", "key_value": "AIzaSy..." }
+Run the setup script again:
 
-Securely saves or updates an API key in the API.keys file.
+sudo ./setup.py
 
-Hardware, GNSS & LTE Control
-Method
+Select option 3 (System & Update) then 1 (Run Update & Patch Check). This will redeploy updated files and reinstall services, ensuring everything is fresh.
 
-Endpoint
+🖥️ Usage
+Once installed and running, access your π-Backend dashboard and API:
 
-Request Body / Params
+Dashboard URL:
 
-Description
+If you configured SSL: https://your_domain_name/ (e.g., https://jengus.wifi.local.falcontechnix.com/)
 
-GET
+If no SSL: http://your_pi_ip_address/ (e.g., http://192.168.1.100/)
 
-/api/hardware/cpu
+API Base URL: The API endpoints are accessible under /api/ relative to your dashboard URL.
 
-(none)
+Example: https://your_domain_name/api/status
 
-Gets current CPU usage percentage.
+📋 API Endpoints Reference
+For a live, up-to-date, and interactive list of all available API endpoints, their methods, and descriptions, navigate to the "API Endpoints" tab on your deployed dashboard. This tab dynamically fetches information directly from your running backend, ensuring accuracy.
 
-GET
+Example: https://your_domain_name/ -> Click "API Endpoints" tab.
 
-/api/hardware/memory
+⚠️ Known Issues & Troubleshooting
+This section highlights common issues and provides debugging steps.
 
-(none)
+chrony.service failure:
 
-Gets current memory usage percentage.
+Symptom: systemctl status chrony.service shows failed, and journalctl -xeu chrony.service might show errors related to time sources or permissions.
 
-GET
+Cause: Often occurs if GPS signal is not immediately available or if previous NTP services conflict.
 
-/api/hardware/sensehat
+Solution:
 
-(none)
+Ensure your GPS HAT has a clear view of the sky.
 
-Gets sensor data from the Sense HAT.
+After setup.py completes, a sudo reboot can often resolve this as it allows all services to start cleanly.
 
-GET
+If persistent, manually check sudo chronyc sources and sudo journalctl -u chrony.service --no-pager.
 
-/api/hardware/gps
+You can manage Chrony config via sudo ./setup.py -> Diagnostics & Tools.
 
-(none)
+"Service Unavailable" / API Not Reachable:
 
-Gets GNSS data from the gpsd service (now handled by gnss_services.py).
+Symptom: When accessing https://your_domain_name/ or https://your_domain_name/api/status, you see a "Service Unavailable" or "Couldn't connect to server" error.
 
-GET
+Cause: This means Apache is running, but your Flask API (run by Gunicorn) is not reachable on http://127.0.0.1:5000.
 
-/api/hardware/gps/uart
+Solution:
 
-(none)
+Check API Service Status: systemctl status pi_backend_api.service. It should be active (running). If failed, proceed.
 
-Gets raw NMEA GNSS data directly from the default serial port (now handled by gnss_services.py).
+Review API Service Logs: journalctl -u pi_backend_api.service --no-pager -n 50. Look for Python tracebacks (e.g., ModuleNotFoundError, NameError), Gunicorn binding errors, or Flask application errors.
 
-GET
+Verify Gunicorn Listener: sudo ss -tuln | grep 5000. You should see LISTEN on port 5000.
 
-/api/hardware/gps/status
+Permissions: Ensure /var/www/pi_backend (your __INSTALL_PATH__) and its contents are owned by www-data:www-data. Run sudo ./setup.py and select "Enforce Final File & User Permissions".
 
-(none)
+Apache Config: Ensure DocumentRoot is correctly pointing to /var/www/pi_backend_static and ProxyPass /api/ is correct. setup.py should handle this, but verify the templates if necessary.
 
-Checks if the gpsd service is running (now handled by gnss_services.py).
+Reboot: A sudo reboot often resolves transient issues.
 
-GET
+Missing Google Places API Data:
 
-/api/hardware/lte/status
+Symptom: POI data on the map or via API lacks phone numbers, websites, or has generic addresses.
 
-?port=/dev/ttyUSB2 (optional)
+Cause: The GOOGLE_PLACES_API_KEY is either missing or invalid in your database.
 
-Gets status, signal strength, and operator from a connected LTE modem.
+Solution: Run sudo ./setup.py and select the "Keys & Admin" tab (login as admin if needed). Ensure GOOGLE_PLACES_API_KEY is present and correct.
 
-POST
+UPS Data Not Updating:
 
-/api/hardware/lte/power-cycle
+Symptom: UPS HAT data on the dashboard or API is stale or missing.
 
-(none)
+Cause: The ups_status.py script, which continuously logs data, might not be running. The old ups_daemon.py is no longer used.
 
-Toggles the LTE modem power by pulsing the GPIO power key.
+Solution: Ensure ups_status.py is running in continuous mode in the background. You can start it manually for testing: python3 /path/to/pi_backend/ups_status.py -c. For persistent logging, set it up as a systemd service if you haven't already done so (this would be a manual systemd unit creation not currently covered by setup.py but is a planned enhancement).
 
-POST
+Animated SVGs / Advanced Visualizations:
 
-/api/hardware/lte/flight-mode
+Symptom: Animated SVGs are not appearing in the README.md.
 
-{ "enable": true } or { "enable": false }
+Cause: Direct generation of complex animated SVGs within Markdown or by this model is not currently supported.
 
-Enables or disables the modem's flight mode via GPIO.
+Solution: This feature is not implemented. For animated visualizations, you would typically use external tools to generate the SVG and then link to it or embed it, or use JavaScript animation libraries in your frontend.
 
-External Data & Database
-Method
+🤝 Contributing
+Contributions are welcome! If you find a bug or have a feature request, please open an issue on the GitHub repository.
 
-Endpoint
-
-Query Parameters (Example)
-
-Description
-
-GET
-
-/api/location-data
-
-?location=Tokyo&modules=forecast
-
-Resolves a location and fetches Open-Meteo data. Can use GNSS if no location is provided.
-
-GET
-
-/api/weather-data
-
-?location=London,UK&services=openweather
-
-Fetches aggregated weather data from various APIs.
-
-POST
-
-/api/data
-
-{ "data": "your_string_here" }
-
-Saves a generic string to the database.
-
-GET
-
-/api/data
-
-(none)
-
-Retrieves all saved data entries.
+📄 License
+This project is licensed under the MIT License - see the LICENSE file for details.

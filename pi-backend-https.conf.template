@@ -1,29 +1,49 @@
 <IfModule mod_ssl.c>
 <VirtualHost *:443>
     ServerName __SERVER_NAME__
-    # Keep the default DocumentRoot for other web content
-    DocumentRoot __HTTP_WEB_ROOT__
 
-    SSLEngine on
-    SSLCertificateFile    __SSL_CERT_FILE__
-    SSLCertificateKeyFile __SSL_KEY_FILE__
-
-    # Alias for the pi_backend frontend files
-    Alias /pi_backend/ "__INSTALL_PATH__/"
-    <Directory "__INSTALL_PATH__/">
+    # Serve static files from the dedicated static web root for the main domain
+    DocumentRoot __STATIC_WEB_ROOT__
+    <Directory __STATIC_WEB_ROOT__>
         Options Indexes FollowSymLinks
-        AllowOverride None
+        AllowOverride All
         Require all granted
+        DirectoryIndex index.html # Ensure index.html is the default file for the root
     </Directory>
 
-    # ProxyPass configuration for the API over SSL
+    # Proxy API requests to Gunicorn (running from __INSTALL_PATH__)
+    # This must be defined before any general Alias or RewriteRule for /
     ProxyPreserveHost On
-    # Corrected: Added the /api/ path to the destination URL
-    ProxyPass /api/ unix:__INSTALL_PATH__/pi_backend.sock|http://localhost/api/ retry=0
-    ProxyPassReverse /api/ unix:__INSTALL_PATH__/pi_backend.sock|http://localhost/api/
+    ProxyRequests Off
+    ProxyPass /api/ http://127.0.0.1:5000/api/
+    ProxyPassReverse /api/ http://127.0.0.1:5000/api/
 
-    ErrorLog ${APACHE_LOG_DIR}/pi_backend_ssl_error.log
-    CustomLog ${APACHE_LOG_DIR}/pi_backend_ssl_access.log combined
+    # Deny direct web access to the backend Python code directory
+    # This prevents users from browsing your Python source code.
+    <Directory __INSTALL_PATH__>
+        Require all denied
+    </Directory>
 
+    ErrorLog ${APACHE_LOG_DIR}/pi-backend-ssl-error.log
+    CustomLog ${APACHE_LOG_DIR}/pi-backend-ssl-access.log combined
+
+    SSLEngine on
+    SSLCertificateFile __SSL_CERT_FILE__
+    SSLCertificateKeyFile __SSL_KEY_FILE__
+    # SSLCertificateChainFile /etc/letsencrypt/live/your_domain/chain.pem # Uncomment if your cert provider requires it
+
+    # Standard SSL options for CGI/PHP (good practice)
+    <FilesMatch "\.(cgi|shtml|phtml|php)$">
+        SSLOptions +StdEnvVars
+    </FilesMatch>
+    <Directory /usr/lib/cgi-bin>
+        SSLOptions +StdEnvVars
+    </Directory>
+
+    # Browser compatibility for older IE versions
+    BrowserMatch "MSIE [2-6]" \
+    nokeepalive ssl-unclean-shutdown \
+    downgrade-1.0 force-response-1.0
+    BrowserMatch "MSIE [17-9]" ssl-unclean-shutdown
 </VirtualHost>
 </IfModule>

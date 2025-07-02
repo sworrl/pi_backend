@@ -1,25 +1,30 @@
 <VirtualHost *:80>
     ServerName __SERVER_NAME__
-    # Keep the default DocumentRoot for other web content
-    DocumentRoot __HTTP_WEB_ROOT__
 
-    # Alias for the pi_backend frontend files
-    Alias /pi_backend/ "__INSTALL_PATH__/"
-    <Directory "__INSTALL_PATH__/">
+    # Redirect all HTTP traffic to HTTPS if SSL is enabled
+    # __REDIRECT_PLACEHOLDER__
+
+    # Serve static files from the dedicated static web root
+    DocumentRoot __STATIC_WEB_ROOT__
+    <Directory __STATIC_WEB_ROOT__>
         Options Indexes FollowSymLinks
-        AllowOverride None
+        AllowOverride All
         Require all granted
+        DirectoryIndex index.html # Ensure index.html is the default file for the root
     </Directory>
 
-    # ProxyPass configuration for the API
+    # Proxy API requests to Gunicorn (running from __INSTALL_PATH__)
+    # This should be handled before any general static file serving rules for /
     ProxyPreserveHost On
-    # Corrected: Added the /api/ path to the destination URL
-    ProxyPass /api/ unix:__INSTALL_PATH__/pi_backend.sock|http://localhost/api/ retry=0
-    ProxyPassReverse /api/ unix:__INSTALL_PATH__/pi_backend.sock|http://localhost/api/
+    ProxyRequests Off
+    ProxyPass /api/ http://127.0.0.1:5000/api/
+    ProxyPassReverse /api/ http://127.0.0.1:5000/api/
 
-    ErrorLog ${APACHE_LOG_DIR}/pi_backend_error.log
-    CustomLog ${APACHE_LOG_DIR}/pi_backend_access.log combined
+    # Deny direct web access to the backend Python code directory
+    <Directory __INSTALL_PATH__>
+        Require all denied
+    </Directory>
 
-    # This placeholder will be replaced with a redirect to HTTPS if SSL is enabled.
-    # __REDIRECT_PLACEHOLDER__
+    ErrorLog ${APACHE_LOG_DIR}/pi-backend-error.log
+    CustomLog ${APACHE_LOG_DIR}/pi-backend-access.log combined
 </VirtualHost>
