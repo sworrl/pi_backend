@@ -1,12 +1,14 @@
 #
 # File: community_services.py
-# Version: 1.4.0 (Expanded POI & Google Enrichment)
+# Version: 1.5.0 (Overpass Rate Limit Mitigation)
 #
 # Description: This module provides functionality to find nearby points of
 #              interest (POIs) by querying OpenStreetMap and local data files,
 #              with optional enrichment from Google Places API.
 #
-# Changelog (v1.4.0):
+# Changelog (v1.5.0):
+# - FEAT: Added a `time.sleep(1)` delay before each Overpass API request in
+#   `_fetch_overpass_pois` to mitigate `429 Too Many Requests` errors.
 # - FEAT: Expanded `POI_QUERIES` to include a much wider range of infrastructure
 #   types (sewage plants, sewage pumps, substations, landfills, water treatment,
 #   government offices, airports, train stations, etc.).
@@ -24,13 +26,14 @@ from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
 import logging
 import sys
+import time # Added for time.sleep
 
 # Overpass API endpoint for general POIs
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 # Local data file for specialized PFAS data
 PFAS_DATA_FILE = "/var/lib/pi_backend/pfas_sites.json"
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 # Configure logging for this module
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -130,10 +133,12 @@ def _fetch_overpass_pois(poi_type, bbox):
     query = POI_QUERIES[poi_type].replace('{{bbox}}', bbox)
     
     # For relations (e.g., landuse=water_management), we need to request their center
-    if "relation" in query:
+    if "relation" in query or "way" in query: # Also include 'way' for relations that are ways
         query = query.replace("out;", "out center;")
 
     try:
+        # Add a small delay to mitigate hitting Overpass API rate limits
+        time.sleep(1) 
         response = requests.post(OVERPASS_API_URL, data=query, timeout=30)
         response.raise_for_status()
         elements = response.json().get('elements', [])
